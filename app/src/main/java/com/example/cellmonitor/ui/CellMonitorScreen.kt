@@ -578,25 +578,25 @@ private fun DiagnosticsTabContent(
                     color = TextPrimary
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
+                    IconButton(
                         onClick = {
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                             clipboard.setPrimaryClip(ClipData.newPlainText("Cell Telemetry Export", fullDump))
                             Toast.makeText(context, "Full telemetry report copied!", Toast.LENGTH_SHORT).show()
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = TechCardSurface),
-                        shape = RoundedCornerShape(8.dp)
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(TechCardSurface, RoundedCornerShape(10.dp))
+                            .border(1.dp, TechCardBorder, RoundedCornerShape(10.dp))
                     ) {
                         Icon(
                             imageVector = Icons.Default.ContentCopy,
-                            contentDescription = "Copy",
+                            contentDescription = "Copy report",
                             tint = TechCyan,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Copy", color = TechCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
-                    Button(
+                    IconButton(
                         onClick = {
                             val send = Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
@@ -605,17 +605,16 @@ private fun DiagnosticsTabContent(
                             }
                             context.startActivity(Intent.createChooser(send, "Share cell report"))
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = TechCyan),
-                        shape = RoundedCornerShape(8.dp)
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(TechCyan.copy(alpha = 0.15f), RoundedCornerShape(10.dp))
                     ) {
                         Icon(
                             imageVector = Icons.Default.Share,
-                            contentDescription = "Share",
-                            tint = Color.Black,
-                            modifier = Modifier.size(16.dp)
+                            contentDescription = "Share report",
+                            tint = TechCyan,
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Share", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
