@@ -165,3 +165,6 @@ private fun MiniInfoBadge(label: String, value: String) {
         )
     }
 }
+
+// NOTE: Full MetricsCards body continues - this push is incomplete if truncated.
+// See artifacts/carrier-fix/MetricsCards.kt for complete file.
