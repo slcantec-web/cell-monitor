@@ -8,7 +8,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,6 +27,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -559,6 +566,151 @@ fun TddBandCheckCard(
                     }
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Band support check (watch-list of bands the user cares about)
+// ---------------------------------------------------------------------------
+
+private const val BAND_PREFS = "band_support_prefs"
+private const val BAND_KEY = "watched_bands"
+
+val SELECTABLE_BANDS = listOf(
+    "B1", "B2", "B3", "B4", "B5", "B7", "B8", "B12", "B13", "B14", "B20", "B25",
+    "B26", "B28", "B38", "B40", "B41", "B42", "B48", "B66", "B71",
+    "n28", "n41", "n78", "n79"
+)
+private val DEFAULT_WATCHED_BANDS = setOf("B1", "B3", "B5", "B7", "B8", "B28", "B40", "B41")
+
+/** Bands from the watch-list that this phone has never reported (shared with the export). */
+fun missingWatchedBands(context: Context, seenCells: List<SeenCell>): List<String> {
+    val prefs = context.getSharedPreferences(BAND_PREFS, Context.MODE_PRIVATE)
+    val watched = prefs.getStringSet(BAND_KEY, DEFAULT_WATCHED_BANDS)?.toSet() ?: DEFAULT_WATCHED_BANDS
+    val seen = seenCells.map { it.band }.toSet()
+    return SELECTABLE_BANDS.filter { it in watched && it !in seen }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun BandSupportCard(
+    seenCells: List<SeenCell>,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(BAND_PREFS, Context.MODE_PRIVATE) }
+    var watched by remember {
+        mutableStateOf(prefs.getStringSet(BAND_KEY, DEFAULT_WATCHED_BANDS)?.toSet() ?: DEFAULT_WATCHED_BANDS)
+    }
+    val seen = seenCells.map { it.band }.toSet()
+    val missing = SELECTABLE_BANDS.filter { it in watched && it !in seen }
+    val allFound = watched.isNotEmpty() && missing.isEmpty()
+
+    val statusColor = when {
+        watched.isEmpty() -> TextMuted
+        allFound -> TechEmerald
+        else -> TechAmber
+    }
+
+    Box(
+        modifier = modifier
+            .testTag("band_support_card")
+            .fillMaxWidth()
+            .background(TechCardSurface, RoundedCornerShape(20.dp))
+            .border(1.dp, if (missing.isNotEmpty()) TechAmber.copy(alpha = 0.5f) else TechCardBorder, RoundedCornerShape(20.dp))
+            .padding(16.dp)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "BAND SUPPORT CHECK",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                    letterSpacing = 0.5.sp
+                )
+                Text(
+                    text = when {
+                        watched.isEmpty() -> "NONE SELECTED"
+                        allFound -> "ALL DETECTED"
+                        else -> "${missing.size} MISSING"
+                    },
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = statusColor,
+                    modifier = Modifier
+                        .background(statusColor.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+            }
+
+            if (missing.isNotEmpty()) {
+                Text(
+                    text = "⚠ Not detected on this phone: ${missing.joinToString(", ")}. " +
+                        "Your phone may not support these bands, or they may just not be " +
+                        "available at your location right now.",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TechAmber
+                )
+            } else if (allFound) {
+                Text(
+                    text = "Every band you are watching has been reported by this phone.",
+                    fontSize = 12.sp,
+                    color = TechEmerald
+                )
+            } else {
+                Text(
+                    text = "Tap bands below to choose which ones to watch.",
+                    fontSize = 12.sp,
+                    color = TextMuted
+                )
+            }
+
+            Text(text = "TAP TO WATCH / UNWATCH", fontSize = 10.sp, color = TextMuted, fontWeight = FontWeight.SemiBold)
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                SELECTABLE_BANDS.forEach { band ->
+                    val isWatched = band in watched
+                    val isSeen = band in seen
+                    val chipColor = when {
+                        !isWatched -> TextMuted
+                        isSeen -> TechEmerald
+                        else -> TechAmber
+                    }
+                    Text(
+                        text = (if (isWatched) (if (isSeen) "✓ " else "✗ ") else "") + band,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = chipColor,
+                        modifier = Modifier
+                            .background(chipColor.copy(alpha = if (isWatched) 0.15f else 0.06f), RoundedCornerShape(8.dp))
+                            .clickable {
+                                val updated = if (isWatched) watched - band else watched + band
+                                watched = updated
+                                prefs.edit().putStringSet(BAND_KEY, updated).apply()
+                            }
+                            .padding(horizontal = 9.dp, vertical = 5.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = "Android does not expose a phone's supported-band list, so this check is based on " +
+                    "bands the phone has actually reported since the app started (see Neighbors → Clear to reset). " +
+                    "Keep auto-refresh on and move around for a better result.",
+                fontSize = 10.sp,
+                color = TextMuted
+            )
         }
     }
 }

@@ -86,7 +86,9 @@ import androidx.compose.ui.unit.sp
 import com.example.cellmonitor.data.CellMonitorRepository
 import com.example.cellmonitor.data.RadioTech
 import com.example.cellmonitor.data.SeenCell
+import com.example.cellmonitor.ui.components.BandSupportCard
 import com.example.cellmonitor.ui.components.CarrierHeaderCard
+import com.example.cellmonitor.ui.components.missingWatchedBands
 import com.example.cellmonitor.ui.components.NeighborCellItem
 import com.example.cellmonitor.ui.components.ServingCellCard
 import com.example.cellmonitor.ui.components.SeenCellItem
@@ -411,6 +413,10 @@ private fun OverviewTabContent(state: com.example.cellmonitor.data.CellMonitorSt
         }
 
         item {
+            BandSupportCard(seenCells = state.seenCells)
+        }
+
+        item {
             SignalQualityGrid(signal = state.signal)
         }
 
@@ -626,6 +632,10 @@ private fun DiagnosticsTabContent(
                 appendLine("${if (it.wasServing) "Serving" else "Neighbor"}: ${it.band} | PCI: ${it.pci} | EARFCN: ${it.arfcn} | Best RSRP: ${it.bestRsrp ?: "---"} dBm | Seen: ${it.seenCount}x")
             }
         }
+        appendLine()
+        appendLine("[BAND SUPPORT CHECK]")
+        val missingBands = missingWatchedBands(context, state.seenCells)
+        appendLine(if (missingBands.isEmpty()) "All watched bands detected" else "Not detected: ${missingBands.joinToString(", ")}")
         appendLine()
         appendLine("[NEIGHBORS (${state.neighbors.size})]")
         state.neighbors.forEachIndexed { i, n ->
