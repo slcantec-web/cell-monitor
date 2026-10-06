@@ -3,8 +3,12 @@ package com.example.cellmonitor.ui
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,6 +43,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
@@ -435,6 +440,10 @@ private fun ServingCellTabContent(state: com.example.cellmonitor.data.CellMonito
         }
 
         item {
+            CellMapperButton(state = state)
+        }
+
+        item {
             CarrierHeaderCard(carrier = state.carrier)
         }
 
@@ -711,5 +720,98 @@ private fun DiagnosticsTabContent(
         item {
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+}
+
+
+@Composable
+private fun CellMapperButton(state: com.example.cellmonitor.data.CellMonitorState) {
+    val context = LocalContext.current
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Button(
+            onClick = { openCellMapper(context, state) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = TechCyan.copy(alpha = 0.15f),
+                contentColor = TechCyan
+            ),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Map,
+                contentDescription = "Open CellMapper",
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Find tower on CellMapper", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+        Text(
+            text = "Opens CellMapper near your last known location, filtered to your carrier. Match the eNB ID above with the towers on the map.",
+            fontSize = 10.sp,
+            color = TextMuted,
+            modifier = Modifier.padding(top = 6.dp, start = 4.dp, end = 4.dp)
+        )
+    }
+}
+
+private fun openCellMapper(context: Context, state: com.example.cellmonitor.data.CellMonitorState) {
+    if (state.isDemoMode) {
+        Toast.makeText(context, "Simulation is on - turn it off to use your real carrier", Toast.LENGTH_LONG).show()
+        return
+    }
+
+    val mcc = state.carrier.mcc.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+    val mnc = state.carrier.mnc.toIntOrNull()
+    val type = when (state.servingCell?.tech) {
+        RadioTech.NR_SA -> "NR"
+        RadioTech.WCDMA -> "UMTS"
+        RadioTech.GSM -> "GSM"
+        else -> "LTE"
+    }
+
+    // Last known phone location (no extra services needed)
+    var lat: Double? = null
+    var lon: Double? = null
+    if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+        try {
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val best = listOf(
+                LocationManager.GPS_PROVIDER,
+                LocationManager.NETWORK_PROVIDER,
+                LocationManager.PASSIVE_PROVIDER
+            ).mapNotNull { provider -> runCatching { lm.getLastKnownLocation(provider) }.getOrNull() }
+                .maxByOrNull { it.time }
+            lat = best?.latitude
+            lon = best?.longitude
+        } catch (e: SecurityException) {
+            // ignored - falls back to default map view
+        }
+    }
+
+    if (lat == null || lon == null) {
+        Toast.makeText(
+            context,
+            "No saved location yet - turn on Location and open Google Maps once, then try again",
+            Toast.LENGTH_LONG
+        ).show()
+    }
+
+    val builder = Uri.Builder().scheme("https").authority("www.cellmapper.net").path("map")
+    if (mcc != null) builder.appendQueryParameter("MCC", mcc)
+    if (mnc != null) builder.appendQueryParameter("MNC", mnc.toString())
+    builder.appendQueryParameter("type", type)
+    if (lat != null && lon != null) {
+        builder.appendQueryParameter("latitude", String.format(Locale.US, "%.6f", lat))
+        builder.appendQueryParameter("longitude", String.format(Locale.US, "%.6f", lon))
+        builder.appendQueryParameter("zoom", "15")
+    }
+    builder.appendQueryParameter("showTowers", "true")
+
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, builder.build()))
+    } catch (e: ActivityNotFoundException) {
+        Toast.makeText(context, "No browser found to open CellMapper", Toast.LENGTH_SHORT).show()
     }
 }
