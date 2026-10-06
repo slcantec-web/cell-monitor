@@ -86,6 +86,7 @@ import com.example.cellmonitor.ui.components.ServingCellCard
 import com.example.cellmonitor.ui.components.SignalGauge
 import com.example.cellmonitor.ui.components.SignalGraph
 import com.example.cellmonitor.ui.components.SignalQualityGrid
+import com.example.cellmonitor.ui.components.TddBandCheckCard
 import com.example.cellmonitor.ui.theme.TechAmber
 import com.example.cellmonitor.ui.theme.TechCardBorder
 import com.example.cellmonitor.ui.theme.TechCardSurface
@@ -396,6 +397,14 @@ private fun OverviewTabContent(state: com.example.cellmonitor.data.CellMonitorSt
         }
 
         item {
+            TddBandCheckCard(
+                serving = state.servingCell,
+                signal = state.signal,
+                neighbors = state.neighbors
+            )
+        }
+
+        item {
             SignalQualityGrid(signal = state.signal)
         }
 
@@ -552,6 +561,16 @@ private fun DiagnosticsTabContent(
         appendLine("Timing Advance: ${state.signal.timingAdvance ?: "---"}")
         appendLine("Quality Rating: ${state.signal.quality.label}")
         appendLine("Score Percentage: ${state.signal.scorePercentage}%")
+        appendLine()
+        appendLine("[TDD BAND CHECK (B40 / B41)]")
+        val tddServing = state.servingCell?.takeIf { it.band == "B40" || it.band == "B41" }
+        val tddNeighbors = state.neighbors.filter { it.techType == "LTE" && (it.band == "B40" || it.band == "B41") }
+        if (tddServing == null && tddNeighbors.isEmpty()) {
+            appendLine("Not detected")
+        } else {
+            tddServing?.let { appendLine("Serving: ${it.band} | PCI: ${it.pci} | EARFCN: ${it.arfcn} | RSRP: ${state.signal.rsrp ?: "---"} dBm") }
+            tddNeighbors.forEach { appendLine("Neighbor: ${it.band} | PCI: ${it.pci} | EARFCN: ${it.arfcn} | RSRP: ${it.rsrp ?: "---"} dBm") }
+        }
         appendLine()
         appendLine("[NEIGHBORS (${state.neighbors.size})]")
         state.neighbors.forEachIndexed { i, n ->

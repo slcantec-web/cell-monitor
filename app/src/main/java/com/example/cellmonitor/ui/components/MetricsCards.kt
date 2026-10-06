@@ -508,3 +508,130 @@ fun NeighborCellItem(
         }
     }
 }
+
+
+private data class BandHit(
+    val band: String,
+    val role: String,
+    val pci: Int,
+    val arfcn: Int,
+    val rsrp: Int?
+)
+
+/**
+ * Looks through the serving cell and all LTE neighbors for Band 40 (2300 MHz TDD)
+ * and Band 41 (2500 MHz TDD) and reports whether either was seen.
+ */
+@Composable
+fun TddBandCheckCard(
+    serving: ServingCell?,
+    signal: SignalMetrics,
+    neighbors: List<NeighborCell>,
+    modifier: Modifier = Modifier
+) {
+    val targets = mapOf("B40" to "2300 MHz TDD", "B41" to "2500 MHz TDD")
+
+    val hits = buildList {
+        if (serving != null && serving.band in targets) {
+            add(BandHit(serving.band, "Serving", serving.pci, serving.arfcn, signal.rsrp))
+        }
+        neighbors.filter { it.techType == "LTE" && it.band in targets }.forEach {
+            add(BandHit(it.band, "Neighbor", it.pci, it.arfcn, it.rsrp))
+        }
+    }.sortedByDescending { it.rsrp ?: -999 }
+
+    val found = hits.isNotEmpty()
+    val statusColor = if (found) TechEmerald else TechAmber
+
+    Box(
+        modifier = modifier
+            .testTag("tdd_band_check_card")
+            .fillMaxWidth()
+            .background(TechCardSurface, RoundedCornerShape(20.dp))
+            .border(1.dp, TechCardBorder, RoundedCornerShape(20.dp))
+            .padding(16.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "TDD BAND CHECK",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        letterSpacing = 0.5.sp
+                    )
+                    Text(text = "Band 40 (2300) & Band 41 (2500)", fontSize = 10.sp, color = TextMuted)
+                }
+                Text(
+                    text = if (found) "DETECTED" else "NOT DETECTED",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = statusColor,
+                    modifier = Modifier
+                        .background(statusColor.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (!found) {
+                Text(
+                    text = "No Band 40 / 41 cell is being reported at this location right now.",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+            } else {
+                hits.forEach { hit ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "${hit.band} \u2022 ${targets[hit.band]}",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text = "${hit.role} \u2022 PCI ${hit.pci} \u2022 EARFCN ${hit.arfcn}",
+                                fontSize = 11.sp,
+                                color = TextSecondary,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        val rsrp = hit.rsrp
+                        Text(
+                            text = rsrp?.let { "$it dBm" } ?: "---",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = when {
+                                (rsrp ?: -999) >= -90 -> TechEmerald
+                                (rsrp ?: -999) >= -105 -> TechAmber
+                                else -> TechRose
+                            },
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Only shows cells your phone reports. A phone that doesn't support these bands can't see them.",
+                fontSize = 10.sp,
+                color = TextMuted
+            )
+        }
+    }
+}
