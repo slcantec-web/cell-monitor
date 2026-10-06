@@ -1,0 +1,6 @@
+{
+  "name": "Cell Monitor",
+  "description": "Cellular network and signal monitoring app displaying real-time LTE and 5G metrics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
