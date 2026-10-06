@@ -45,6 +45,47 @@ class CellMonitorRepository(
     val state: StateFlow<CellMonitorState> = _state.asStateFlow()
 
     private var autoRefreshJob: Job? = null
+
+    // --- Running log of every cell the phone has reported since the last clear ---
+    private data class CellObservation(
+        val techType: String,
+        val band: String,
+        val arfcn: Int,
+        val pci: Int,
+        val rsrp: Int?,
+        val serving: Boolean
+    )
+
+    private val seenMap = LinkedHashMap<String, SeenCell>()
+
+    private fun recordSeen(obs: List<CellObservation>) {
+        val now = System.currentTimeMillis()
+        synchronized(seenMap) {
+            obs.forEach { o ->
+                val key = "${o.techType}|${o.band}|${o.arfcn}|${o.pci}"
+                val old = seenMap[key]
+                seenMap[key] = SeenCell(
+                    techType = o.techType,
+                    band = o.band,
+                    arfcn = o.arfcn,
+                    pci = o.pci,
+                    wasServing = (old?.wasServing == true) || o.serving,
+                    lastRsrp = o.rsrp ?: old?.lastRsrp,
+                    bestRsrp = listOfNotNull(old?.bestRsrp, o.rsrp).maxOrNull(),
+                    firstSeenMs = old?.firstSeenMs ?: now,
+                    lastSeenMs = now,
+                    seenCount = (old?.seenCount ?: 0) + 1
+                )
+            }
+        }
+    }
+
+    private fun seenSnapshot(): List<SeenCell> = synchronized(seenMap) { seenMap.values.toList() }
+
+    fun clearSeenCells() {
+        synchronized(seenMap) { seenMap.clear() }
+        _state.update { it.copy(seenCells = emptyList()) }
+    }
     private val maxHistoryPoints = 30
 
     // --- Phone's own "display" network type (what drives the 5G icon in the status bar) ---
@@ -408,6 +449,54 @@ class CellMonitorRepository(
             }
         }
 
+        // Record every reported cell (all technologies) in the running log
+        val observations = mutableListOf<CellObservation>()
+        lteCells.forEach { c ->
+            val id = c.cellIdentity
+            val rsrp = c.cellSignalStrength.rsrp.takeIf { it != Int.MAX_VALUE && it in -140..-44 }
+            val earfcn = id.earfcn.takeIf { it != Int.MAX_VALUE } ?: 0
+            val pci = id.pci.takeIf { it != Int.MAX_VALUE } ?: 0
+            if (earfcn > 0 || pci > 0) {
+                observations.add(
+                    CellObservation("LTE", BandCalculators.getLteBandString(earfcn), earfcn, pci, rsrp, c.isRegistered)
+                )
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            nrCells.forEach { c ->
+                val id = c.cellIdentity as? CellIdentityNr
+                val str = c.cellSignalStrength as? CellSignalStrengthNr
+                val band = id?.bands?.firstOrNull() ?: 0
+                val arfcn = id?.nrarfcn?.takeIf { it != Int.MAX_VALUE } ?: 0
+                val pci = id?.pci?.takeIf { it != Int.MAX_VALUE } ?: 0
+                val rsrp = str?.ssRsrp?.takeIf { it != Int.MAX_VALUE && it in -140..-44 }
+                if (arfcn > 0 || pci > 0) {
+                    observations.add(
+                        CellObservation("5G NR", BandCalculators.getNrBandString(band), arfcn, pci, rsrp, c.isRegistered)
+                    )
+                }
+            }
+        }
+        wcdmaCells.forEach { c ->
+            val id = c.cellIdentity
+            val arfcn = id.uarfcn.takeIf { it != Int.MAX_VALUE } ?: 0
+            val psc = id.psc.takeIf { it != Int.MAX_VALUE } ?: 0
+            val dbm = c.cellSignalStrength.dbm.takeIf { it != Int.MAX_VALUE && it in -140..-30 }
+            if (arfcn > 0 || psc > 0) {
+                observations.add(CellObservation("3G", "UMTS", arfcn, psc, dbm, c.isRegistered))
+            }
+        }
+        gsmCells.forEach { c ->
+            val id = c.cellIdentity
+            val arfcn = id.arfcn.takeIf { it != Int.MAX_VALUE } ?: 0
+            val bsic = id.bsic.takeIf { it != Int.MAX_VALUE } ?: 0
+            val dbm = c.cellSignalStrength.dbm.takeIf { it != Int.MAX_VALUE && it in -140..-30 }
+            if (arfcn > 0) {
+                observations.add(CellObservation("2G", "GSM", arfcn, bsic, dbm, c.isRegistered))
+            }
+        }
+        recordSeen(observations)
+
         updateWithNewMetrics(carrier, servingCell, signalMetrics, neighborsList)
     }
 
@@ -435,7 +524,8 @@ class CellMonitorRepository(
                 servingCell = servingCell,
                 signal = signal,
                 neighbors = neighbors.sortedByDescending { n -> n.rsrp ?: -999 },
-                signalHistory = currentHistory
+                signalHistory = currentHistory,
+                seenCells = seenSnapshot()
             )
         }
     }
@@ -500,6 +590,15 @@ class CellMonitorRepository(
             NeighborCell("LTE", "B3", 1500, 204, simRsrp - 11, -11, -11),
             NeighborCell("LTE", "B7", 3100, 88, simRsrp - 19, -16, -19),
             NeighborCell("LTE", "B20", 6300, 412, simRsrp - 22, -18, -22)
+        )
+
+        recordSeen(
+            listOf(
+                CellObservation(
+                    if (servingCell.band.startsWith("n")) "5G NR" else "LTE",
+                    servingCell.band, servingCell.arfcn, servingCell.pci, simRsrp, true
+                )
+            ) + neighbors.map { CellObservation(it.techType, it.band, it.arfcn, it.pci, it.rsrp, false) }
         )
 
         updateWithNewMetrics(carrier, servingCell, signal, neighbors)

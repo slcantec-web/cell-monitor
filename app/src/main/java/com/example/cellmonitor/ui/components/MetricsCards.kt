@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.cellmonitor.data.CarrierInfo
 import com.example.cellmonitor.data.NeighborCell
+import com.example.cellmonitor.data.SeenCell
 import com.example.cellmonitor.data.ServingCell
 import com.example.cellmonitor.data.SignalMetrics
 import com.example.cellmonitor.ui.theme.TechAmber
@@ -510,35 +511,31 @@ fun NeighborCellItem(
 }
 
 
-private data class BandHit(
-    val band: String,
-    val role: String,
-    val pci: Int,
-    val arfcn: Int,
-    val rsrp: Int?
-)
+private val tddTargets = mapOf("B40" to "2300 MHz TDD", "B41" to "2500 MHz TDD")
+
+private fun ageText(nowMs: Long, thenMs: Long): String {
+    val sec = ((nowMs - thenMs) / 1000).coerceAtLeast(0)
+    return when {
+        sec < 5 -> "now"
+        sec < 60 -> "${sec}s ago"
+        sec < 3600 -> "${sec / 60}m ago"
+        else -> "${sec / 3600}h ago"
+    }
+}
 
 /**
- * Looks through the serving cell and all LTE neighbors for Band 40 (2300 MHz TDD)
- * and Band 41 (2500 MHz TDD) and reports whether either was seen.
+ * Reports any Band 40 (2300 MHz TDD) or Band 41 (2500 MHz TDD) LTE cell the phone has
+ * reported since the log was last cleared - even if it was only seen once.
  */
 @Composable
 fun TddBandCheckCard(
-    serving: ServingCell?,
-    signal: SignalMetrics,
-    neighbors: List<NeighborCell>,
+    seenCells: List<SeenCell>,
+    nowMs: Long,
     modifier: Modifier = Modifier
 ) {
-    val targets = mapOf("B40" to "2300 MHz TDD", "B41" to "2500 MHz TDD")
-
-    val hits = buildList {
-        if (serving != null && serving.band in targets) {
-            add(BandHit(serving.band, "Serving", serving.pci, serving.arfcn, signal.rsrp))
-        }
-        neighbors.filter { it.techType == "LTE" && it.band in targets }.forEach {
-            add(BandHit(it.band, "Neighbor", it.pci, it.arfcn, it.rsrp))
-        }
-    }.sortedByDescending { it.rsrp ?: -999 }
+    val hits = seenCells
+        .filter { it.techType == "LTE" && it.band in tddTargets }
+        .sortedByDescending { it.bestRsrp ?: -999 }
 
     val found = hits.isNotEmpty()
     val statusColor = if (found) TechEmerald else TechAmber
@@ -582,7 +579,7 @@ fun TddBandCheckCard(
 
             if (!found) {
                 Text(
-                    text = "No Band 40 / 41 cell is being reported at this location right now.",
+                    text = "No Band 40 / 41 cell has been reported yet. Keep the app open for a few minutes.",
                     fontSize = 12.sp,
                     color = TextSecondary
                 )
@@ -597,31 +594,39 @@ fun TddBandCheckCard(
                     ) {
                         Column {
                             Text(
-                                text = "${hit.band} \u2022 ${targets[hit.band]}",
+                                text = "${hit.band} \u2022 ${tddTargets[hit.band]}",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = TextPrimary,
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
-                                text = "${hit.role} \u2022 PCI ${hit.pci} \u2022 EARFCN ${hit.arfcn}",
+                                text = "${if (hit.wasServing) "Serving" else "Neighbor"} \u2022 PCI ${hit.pci} \u2022 EARFCN ${hit.arfcn}",
                                 fontSize = 11.sp,
                                 color = TextSecondary,
                                 fontFamily = FontFamily.Monospace
                             )
+                            Text(
+                                text = "seen ${hit.seenCount}x \u2022 last ${ageText(nowMs, hit.lastSeenMs)}",
+                                fontSize = 10.sp,
+                                color = TextMuted
+                            )
                         }
-                        val rsrp = hit.rsrp
-                        Text(
-                            text = rsrp?.let { "$it dBm" } ?: "---",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when {
-                                (rsrp ?: -999) >= -90 -> TechEmerald
-                                (rsrp ?: -999) >= -105 -> TechAmber
-                                else -> TechRose
-                            },
-                            fontFamily = FontFamily.Monospace
-                        )
+                        val rsrp = hit.bestRsrp
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = rsrp?.let { "$it dBm" } ?: "---",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = when {
+                                    (rsrp ?: -999) >= -90 -> TechEmerald
+                                    (rsrp ?: -999) >= -105 -> TechAmber
+                                    else -> TechRose
+                                },
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(text = "best", fontSize = 10.sp, color = TextMuted)
+                        }
                     }
                 }
             }
@@ -632,6 +637,97 @@ fun TddBandCheckCard(
                 fontSize = 10.sp,
                 color = TextMuted
             )
+        }
+    }
+}
+
+@Composable
+fun SeenCellItem(
+    cell: SeenCell,
+    nowMs: Long,
+    modifier: Modifier = Modifier
+) {
+    val isTdd = cell.techType == "LTE" && cell.band in tddTargets
+    val borderColor = if (isTdd) TechAmber else TechCardBorder
+    val badgeColor = when (cell.techType) {
+        "5G NR" -> TechEmerald
+        "LTE" -> TechCyan
+        "3G" -> TechPurple
+        else -> TechAmber
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(TechCardSurface, RoundedCornerShape(14.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(14.dp))
+            .padding(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = cell.techType,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = badgeColor,
+                        modifier = Modifier
+                            .background(badgeColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = cell.band,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    if (isTdd) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(text = "TDD", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TechAmber)
+                    }
+                    if (cell.wasServing) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(text = "SERVING", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TechEmerald)
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "PCI: ${cell.pci} \u2022 ARFCN: ${cell.arfcn}",
+                    fontSize = 11.sp,
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    text = "seen ${cell.seenCount}x \u2022 last ${ageText(nowMs, cell.lastSeenMs)}",
+                    fontSize = 10.sp,
+                    color = TextMuted
+                )
+            }
+
+            Column(horizontalAlignment = Alignment.End) {
+                val best = cell.bestRsrp
+                Text(
+                    text = best?.let { "$it dBm" } ?: "---",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = when {
+                        (best ?: -999) >= -90 -> TechEmerald
+                        (best ?: -999) >= -105 -> TechAmber
+                        else -> TechRose
+                    },
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(text = "best", fontSize = 10.sp, color = TextMuted)
+                cell.lastRsrp?.let {
+                    Text(text = "now $it", fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace)
+                }
+            }
         }
     }
 }

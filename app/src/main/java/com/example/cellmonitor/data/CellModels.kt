@@ -67,6 +67,19 @@ data class NeighborCell(
     val deltaRsrp: Int? = null
 )
 
+data class SeenCell(
+    val techType: String,
+    val band: String,
+    val arfcn: Int,
+    val pci: Int,
+    val wasServing: Boolean,
+    val lastRsrp: Int?,
+    val bestRsrp: Int?,
+    val firstSeenMs: Long,
+    val lastSeenMs: Long,
+    val seenCount: Int
+)
+
 data class SignalHistoryPoint(
     val timestampMs: Long,
     val rsrp: Int
@@ -83,5 +96,6 @@ data class CellMonitorState(
     val servingCell: ServingCell? = null,
     val signal: SignalMetrics = SignalMetrics(),
     val neighbors: List<NeighborCell> = emptyList(),
-    val signalHistory: List<SignalHistoryPoint> = emptyList()
+    val signalHistory: List<SignalHistoryPoint> = emptyList(),
+    val seenCells: List<SeenCell> = emptyList()
 )

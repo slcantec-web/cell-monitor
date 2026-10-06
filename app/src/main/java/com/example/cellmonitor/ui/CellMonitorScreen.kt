@@ -80,9 +80,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.cellmonitor.data.CellMonitorRepository
 import com.example.cellmonitor.data.RadioTech
+import com.example.cellmonitor.data.SeenCell
 import com.example.cellmonitor.ui.components.CarrierHeaderCard
 import com.example.cellmonitor.ui.components.NeighborCellItem
 import com.example.cellmonitor.ui.components.ServingCellCard
+import com.example.cellmonitor.ui.components.SeenCellItem
 import com.example.cellmonitor.ui.components.SignalGauge
 import com.example.cellmonitor.ui.components.SignalGraph
 import com.example.cellmonitor.ui.components.SignalQualityGrid
@@ -370,7 +372,7 @@ fun CellMonitorScreen(
             when (selectedTab) {
                 0 -> OverviewTabContent(state)
                 1 -> ServingCellTabContent(state)
-                2 -> NeighborsTabContent(state)
+                2 -> NeighborsTabContent(state) { repository.clearSeenCells() }
                 3 -> DiagnosticsTabContent(state, context)
             }
         }
@@ -398,9 +400,8 @@ private fun OverviewTabContent(state: com.example.cellmonitor.data.CellMonitorSt
 
         item {
             TddBandCheckCard(
-                serving = state.servingCell,
-                signal = state.signal,
-                neighbors = state.neighbors
+                seenCells = state.seenCells,
+                nowMs = state.lastUpdatedMs
             )
         }
 
@@ -448,7 +449,10 @@ private fun ServingCellTabContent(state: com.example.cellmonitor.data.CellMonito
 }
 
 @Composable
-private fun NeighborsTabContent(state: com.example.cellmonitor.data.CellMonitorState) {
+private fun NeighborsTabContent(
+    state: com.example.cellmonitor.data.CellMonitorState,
+    onClearSeen: () -> Unit
+) {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -509,6 +513,48 @@ private fun NeighborsTabContent(state: com.example.cellmonitor.data.CellMonitorS
             }
         }
 
+        // ---- Running log of every cell seen since last clear ----
+        val seenSorted = state.seenCells.sortedWith(
+            compareByDescending<SeenCell> { it.techType == "LTE" && (it.band == "B40" || it.band == "B41") }
+                .thenByDescending { it.bestRsrp ?: -999 }
+        )
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "ALL CELLS SEEN (${seenSorted.size})",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        letterSpacing = 0.5.sp
+                    )
+                    Text(text = "Every cell reported since last clear", fontSize = 11.sp, color = TextMuted)
+                }
+                TextButton(onClick = onClearSeen) {
+                    Text("Clear", fontSize = 12.sp, color = TechAmber)
+                }
+            }
+        }
+        if (seenSorted.isEmpty()) {
+            item {
+                Text(
+                    text = "Nothing logged yet. Keep the app open with auto-refresh on.",
+                    fontSize = 12.sp,
+                    color = TextMuted
+                )
+            }
+        } else {
+            items(seenSorted) { cell ->
+                SeenCellItem(cell = cell, nowMs = state.lastUpdatedMs)
+            }
+        }
+
         item {
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -563,18 +609,23 @@ private fun DiagnosticsTabContent(
         appendLine("Score Percentage: ${state.signal.scorePercentage}%")
         appendLine()
         appendLine("[TDD BAND CHECK (B40 / B41)]")
-        val tddServing = state.servingCell?.takeIf { it.band == "B40" || it.band == "B41" }
-        val tddNeighbors = state.neighbors.filter { it.techType == "LTE" && (it.band == "B40" || it.band == "B41") }
-        if (tddServing == null && tddNeighbors.isEmpty()) {
+        val tddSeen = state.seenCells.filter { it.techType == "LTE" && (it.band == "B40" || it.band == "B41") }
+        if (tddSeen.isEmpty()) {
             appendLine("Not detected")
         } else {
-            tddServing?.let { appendLine("Serving: ${it.band} | PCI: ${it.pci} | EARFCN: ${it.arfcn} | RSRP: ${state.signal.rsrp ?: "---"} dBm") }
-            tddNeighbors.forEach { appendLine("Neighbor: ${it.band} | PCI: ${it.pci} | EARFCN: ${it.arfcn} | RSRP: ${it.rsrp ?: "---"} dBm") }
+            tddSeen.forEach {
+                appendLine("${if (it.wasServing) "Serving" else "Neighbor"}: ${it.band} | PCI: ${it.pci} | EARFCN: ${it.arfcn} | Best RSRP: ${it.bestRsrp ?: "---"} dBm | Seen: ${it.seenCount}x")
+            }
         }
         appendLine()
         appendLine("[NEIGHBORS (${state.neighbors.size})]")
         state.neighbors.forEachIndexed { i, n ->
             appendLine("Tower #${i + 1}: ${n.techType} ${n.band} | PCI: ${n.pci} | ARFCN: ${n.arfcn} | RSRP: ${n.rsrp ?: "---"} dBm | Delta: ${n.deltaRsrp ?: "---"} dB")
+        }
+        appendLine()
+        appendLine("[ALL CELLS SEEN (${state.seenCells.size})]")
+        state.seenCells.forEach { c ->
+            appendLine("${c.techType} ${c.band} | PCI: ${c.pci} | ARFCN: ${c.arfcn} | Best: ${c.bestRsrp ?: "---"} dBm | Last: ${c.lastRsrp ?: "---"} dBm | Seen: ${c.seenCount}x${if (c.wasServing) " | was serving" else ""}")
         }
     }
 
