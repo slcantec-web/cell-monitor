@@ -19,11 +19,20 @@ enum class RadioTech(val displayTitle: String, val generation: String, val badge
 }
 
 data class CarrierInfo(
+    /** Friendly name of the network the radio is currently registered on. */
     val operatorName: String = "---",
+    /** Friendly name of the SIM home operator. */
     val simOperator: String = "---",
+    /** Registered network MCC (from networkOperator). */
     val mcc: String = "---",
+    /** Registered network MNC (from networkOperator). */
     val mnc: String = "---",
+    /** SIM home MCC (from simOperator numeric PLMN). */
+    val simMcc: String = "---",
+    /** SIM home MNC (from simOperator numeric PLMN). */
+    val simMnc: String = "---",
     val countryCode: String = "---",
+    /** True if Android reports roaming OR registered PLMN differs from SIM home PLMN. */
     val isRoaming: Boolean = false,
     val simState: String = "READY",
     val dataNetworkType: String = "LTE",
