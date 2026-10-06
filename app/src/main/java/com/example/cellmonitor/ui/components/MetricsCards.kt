@@ -129,6 +129,9 @@ fun CarrierHeaderCard(
                 MiniInfoBadge(label = "DATA TECH", value = carrier.dataNetworkType)
                 MiniInfoBadge(label = "MCC / MNC", value = "${carrier.mcc} / ${carrier.mnc}")
             }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            MiniInfoBadge(label = "STATUS BAR ICON", value = carrier.displayType)
         }
     }
 }

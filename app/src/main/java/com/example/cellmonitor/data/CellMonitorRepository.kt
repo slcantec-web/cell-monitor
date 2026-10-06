@@ -5,6 +5,8 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.telephony.CellIdentityLte
 import android.telephony.CellIdentityNr
 import android.telephony.CellInfo
@@ -16,6 +18,9 @@ import android.telephony.CellSignalStrengthGsm
 import android.telephony.CellSignalStrengthLte
 import android.telephony.CellSignalStrengthNr
 import android.telephony.CellSignalStrengthWcdma
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyCallback
+import android.telephony.TelephonyDisplayInfo
 import android.telephony.TelephonyManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +47,70 @@ class CellMonitorRepository(
     private var autoRefreshJob: Job? = null
     private val maxHistoryPoints = 30
 
+    // --- Phone's own "display" network type (what drives the 5G icon in the status bar) ---
+    @Volatile private var displayOverride: Int = TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE
+    @Volatile private var displayNetworkType: Int = TelephonyManager.NETWORK_TYPE_UNKNOWN
+    private var displayListenerRegistered = false
+    private var displayListenerRef: Any? = null
+
+    private val displayIs5g: Boolean
+        get() = displayOverride == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA ||
+            displayOverride == 4 /* NR_NSA_MMWAVE (legacy) */ ||
+            displayOverride == 5 /* NR_ADVANCED */ ||
+            displayNetworkType == TelephonyManager.NETWORK_TYPE_NR
+
+    private fun displayLabel(): String = when {
+        displayOverride == 5 -> "5G+ (Advanced)"
+        displayOverride == 4 -> "5G NSA mmWave"
+        displayOverride == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA -> "5G NSA"
+        displayNetworkType == TelephonyManager.NETWORK_TYPE_NR -> "5G SA"
+        displayOverride == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_LTE_ADVANCED_PRO -> "LTE-A Pro (5Ge)"
+        displayOverride == TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_LTE_CA -> "LTE-CA"
+        displayNetworkType == TelephonyManager.NETWORK_TYPE_LTE -> "LTE"
+        displayNetworkType == TelephonyManager.NETWORK_TYPE_UNKNOWN -> "---"
+        else -> "Other"
+    }
+
+    private fun onDisplayInfo(info: TelephonyDisplayInfo) {
+        displayOverride = info.overrideNetworkType
+        displayNetworkType = info.networkType
+        refresh()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun registerDisplayListener() {
+        val tm = telephonyManager ?: return
+        if (displayListenerRegistered) return
+        if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) return
+        displayListenerRegistered = true
+        Handler(Looper.getMainLooper()).post {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val cb = object : TelephonyCallback(), TelephonyCallback.DisplayInfoListener {
+                        override fun onDisplayInfoChanged(telephonyDisplayInfo: TelephonyDisplayInfo) {
+                            onDisplayInfo(telephonyDisplayInfo)
+                        }
+                    }
+                    displayListenerRef = cb
+                    tm.registerTelephonyCallback(context.mainExecutor, cb)
+                } else {
+                    @Suppress("DEPRECATION")
+                    val listener = object : PhoneStateListener() {
+                        @Deprecated("Deprecated in Java")
+                        override fun onDisplayInfoChanged(telephonyDisplayInfo: TelephonyDisplayInfo) {
+                            onDisplayInfo(telephonyDisplayInfo)
+                        }
+                    }
+                    displayListenerRef = listener
+                    @Suppress("DEPRECATION")
+                    tm.listen(listener, PhoneStateListener.LISTEN_DISPLAY_INFO_CHANGED)
+                }
+            } catch (e: Exception) {
+                displayListenerRegistered = false
+            }
+        }
+    }
+
     init {
         checkPermissions()
         refresh()
@@ -52,6 +121,7 @@ class CellMonitorRepository(
         val phoneState = context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
         val granted = fineLocation && phoneState
         _state.update { it.copy(isPermissionGranted = granted) }
+        if (phoneState) registerDisplayListener()
         return granted
     }
 
@@ -165,7 +235,7 @@ class CellMonitorRepository(
         val registeredWcdma = wcdmaCells.firstOrNull { it.isRegistered }
         val registeredGsm = gsmCells.firstOrNull { it.isRegistered }
 
-        val isNrConnected = registeredNr != null || (try {
+        val isNrConnected = registeredNr != null || displayIs5g || (try {
             tm?.serviceState?.toString()?.contains("nrState=CONNECTED") == true
         } catch (e: Exception) {
             false
@@ -201,7 +271,8 @@ class CellMonitorRepository(
                 TelephonyManager.SIM_STATE_ABSENT -> "NO SIM"
                 else -> "ACTIVE"
             },
-            dataNetworkType = tech.displayTitle
+            dataNetworkType = tech.displayTitle,
+            displayType = displayLabel()
         )
 
         // Build Serving Cell & Signal
@@ -389,7 +460,8 @@ class CellMonitorRepository(
             countryCode = "US",
             isRoaming = false,
             simState = "READY",
-            dataNetworkType = "5G NSA"
+            dataNetworkType = "5G NSA",
+            displayType = "5G NSA"
         )
 
         val servingCell = ServingCell(

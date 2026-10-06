@@ -522,6 +522,7 @@ private fun DiagnosticsTabContent(
         appendLine("Country: ${state.carrier.countryCode}")
         appendLine("SIM State: ${state.carrier.simState}")
         appendLine("Data Network: ${state.carrier.dataNetworkType}")
+        appendLine("Status-bar icon type: ${state.carrier.displayType}")
         appendLine("Roaming: ${state.carrier.isRoaming}")
         appendLine()
         appendLine("[SERVING CELL]")

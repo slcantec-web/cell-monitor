@@ -26,7 +26,8 @@ data class CarrierInfo(
     val countryCode: String = "---",
     val isRoaming: Boolean = false,
     val simState: String = "READY",
-    val dataNetworkType: String = "LTE"
+    val dataNetworkType: String = "LTE",
+    val displayType: String = "---"   // what the phone's status-bar icon uses (e.g. 5G NSA)
 )
 
 data class ServingCell(
