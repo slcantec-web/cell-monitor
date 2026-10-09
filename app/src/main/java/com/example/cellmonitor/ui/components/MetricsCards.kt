@@ -3,6 +3,8 @@ package com.example.cellmonitor.ui.components
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,6 +24,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -58,6 +62,56 @@ import com.example.cellmonitor.ui.theme.TechRose
 import com.example.cellmonitor.ui.theme.TextMuted
 import com.example.cellmonitor.ui.theme.TextPrimary
 import com.example.cellmonitor.ui.theme.TextSecondary
+
+// ---------------------------------------------------------------------------
+// CellMapper deep links
+// ---------------------------------------------------------------------------
+
+/** Normalize MNC for CellMapper (strip leading zeros → "02" becomes "2"). */
+private fun cellMapperMnc(mnc: String): String {
+    if (mnc.isBlank() || mnc == "---") return mnc
+    return mnc.trimStart('0').ifEmpty { "0" }
+}
+
+/**
+ * Map URL for an operator + RAT.
+ * Example: https://www.cellmapper.net/map?MCC=413&MNC=2&type=LTE&showTowers=true
+ */
+private fun cellMapperMapUrl(mcc: String, mnc: String, techType: String): String? {
+    if (mcc.isBlank() || mcc == "---" || mnc.isBlank() || mnc == "---") return null
+    val type = when {
+        techType.contains("NR", ignoreCase = true) || techType.contains("5G", ignoreCase = true) -> "NR"
+        techType.contains("LTE", ignoreCase = true) || techType.contains("4G", ignoreCase = true) -> "LTE"
+        techType.contains("WCDMA", ignoreCase = true) || techType.contains("UMTS", ignoreCase = true) ||
+            techType.contains("3G", ignoreCase = true) -> "UMTS"
+        techType.contains("GSM", ignoreCase = true) || techType.contains("2G", ignoreCase = true) -> "GSM"
+        else -> "LTE"
+    }
+    return "https://www.cellmapper.net/map?MCC=$mcc&MNC=${cellMapperMnc(mnc)}&type=$type&showTowers=true"
+}
+
+/**
+ * Cell ID / eNB calculator — useful when you have a full CID.
+ * Example: https://www.cellmapper.net/enbid?net=LTE&cellid=12345678
+ */
+private fun cellMapperEnbUrl(techType: String, cellId: Long): String? {
+    if (cellId <= 0L) return null
+    val net = when {
+        techType.contains("NR", ignoreCase = true) || techType.contains("5G", ignoreCase = true) -> "NR"
+        techType.contains("WCDMA", ignoreCase = true) || techType.contains("UMTS", ignoreCase = true) -> "UMTS"
+        techType.contains("GSM", ignoreCase = true) -> "GSM"
+        else -> "LTE"
+    }
+    return "https://www.cellmapper.net/enbid?net=$net&cellid=$cellId"
+}
+
+private fun openUrl(context: Context, url: String) {
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    } catch (_: Exception) {
+        Toast.makeText(context, "Could not open link", Toast.LENGTH_SHORT).show()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Carrier header (dual network / SIM aware)
@@ -247,9 +301,16 @@ private fun MetricTile(
 fun ServingCellCard(
     cell: ServingCell?,
     signal: SignalMetrics,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Optional registered network MCC/MNC so we can deep-link the operator map. */
+    mcc: String = "---",
+    mnc: String = "---"
 ) {
     val context = LocalContext.current
+    val techLabel = cell?.tech?.displayTitle ?: "LTE"
+    val enbUrl = cell?.cellId?.takeIf { it > 0 }?.let { cellMapperEnbUrl(techLabel, it) }
+    val mapUrl = cellMapperMapUrl(mcc, mnc, techLabel)
+
     Box(
         modifier = modifier
             .testTag("serving_cell_card")
@@ -271,14 +332,29 @@ fun ServingCellCard(
                     color = TextPrimary,
                     letterSpacing = 0.5.sp
                 )
-                if (cell != null) {
-                    Text(
-                        text = "${cell.band} • ${cell.duplex}",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TechCyan,
-                        fontFamily = FontFamily.Monospace
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (cell != null) {
+                        Text(
+                            text = "${cell.band} • ${cell.duplex}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TechCyan,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    if (mapUrl != null || enbUrl != null) {
+                        IconButton(
+                            onClick = { openUrl(context, mapUrl ?: enbUrl!!) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Map,
+                                contentDescription = "Open on CellMapper",
+                                tint = TechCyan,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -299,7 +375,24 @@ fun ServingCellCard(
                 InfoRow("ARFCN", cell.arfcn.toString())
                 InfoRow("Bandwidth", cell.bandwidth)
                 InfoRow("PCI", cell.pci.toString())
-                InfoRow("Cell ID", cell.cellId.toString())
+                // Cell ID → CellMapper calculator
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = "Cell ID", fontSize = 12.sp, color = TextMuted)
+                    Text(
+                        text = cell.cellId.toString(),
+                        fontSize = 13.sp,
+                        color = if (enbUrl != null) TechCyan else TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = if (enbUrl != null) {
+                            Modifier.clickable { openUrl(context, enbUrl) }
+                        } else Modifier
+                    )
+                }
                 cell.nodeBId?.let { enb ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -313,7 +406,10 @@ fun ServingCellCard(
                                 fontSize = 13.sp,
                                 color = TechEmerald,
                                 fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
+                                fontFamily = FontFamily.Monospace,
+                                modifier = if (enbUrl != null) {
+                                    Modifier.clickable { openUrl(context, enbUrl) }
+                                } else Modifier
                             )
                             IconButton(
                                 onClick = {
@@ -329,6 +425,19 @@ fun ServingCellCard(
                                     tint = TechCyan,
                                     modifier = Modifier.size(14.dp)
                                 )
+                            }
+                            if (enbUrl != null) {
+                                IconButton(
+                                    onClick = { openUrl(context, enbUrl) },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.OpenInNew,
+                                        contentDescription = "Open CellMapper calculator",
+                                        tint = TechCyan,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -368,8 +477,12 @@ fun NeighborCellItem(
     neighbor: NeighborCell,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val quality = BandCalculators.evaluateSignalQuality(neighbor.rsrp)
     val color = Color(quality.colorHex)
+    val mapUrl = cellMapperMapUrl(neighbor.mcc, neighbor.mnc, neighbor.techType)
+    val enbUrl = neighbor.cellId?.let { cellMapperEnbUrl(neighbor.techType, it) }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -406,20 +519,35 @@ fun NeighborCellItem(
                 color = TextSecondary,
                 fontFamily = FontFamily.Monospace
             )
-            val idLine = buildString {
-                if (neighbor.cellId != null && neighbor.cellId > 0) append("CID ${neighbor.cellId}")
-                if (neighbor.mcc != "---" && neighbor.mnc != "---") {
-                    if (isNotEmpty()) append(" • ")
-                    append("PLMN ${neighbor.mcc}-${neighbor.mnc}")
+            // CID is clickable → CellMapper eNB calculator; PLMN → map
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (neighbor.cellId != null && neighbor.cellId > 0) {
+                    Text(
+                        text = "CID ${neighbor.cellId}",
+                        fontSize = 10.sp,
+                        color = if (enbUrl != null) TechCyan else TextMuted,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (enbUrl != null) FontWeight.Bold else FontWeight.Normal,
+                        modifier = if (enbUrl != null) {
+                            Modifier.clickable { openUrl(context, enbUrl) }
+                        } else Modifier
+                    )
                 }
-            }
-            if (idLine.isNotEmpty()) {
-                Text(
-                    text = idLine,
-                    fontSize = 10.sp,
-                    color = TextMuted,
-                    fontFamily = FontFamily.Monospace
-                )
+                if (neighbor.mcc != "---" && neighbor.mnc != "---") {
+                    if (neighbor.cellId != null && neighbor.cellId > 0) {
+                        Text(text = " • ", fontSize = 10.sp, color = TextMuted)
+                    }
+                    Text(
+                        text = "PLMN ${neighbor.mcc}-${neighbor.mnc}",
+                        fontSize = 10.sp,
+                        color = if (mapUrl != null) TechCyan else TextMuted,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (mapUrl != null) FontWeight.Bold else FontWeight.Normal,
+                        modifier = if (mapUrl != null) {
+                            Modifier.clickable { openUrl(context, mapUrl) }
+                        } else Modifier
+                    )
+                }
             }
         }
         Column(horizontalAlignment = Alignment.End) {
@@ -441,6 +569,22 @@ fun NeighborCellItem(
                 color = TextMuted,
                 fontFamily = FontFamily.Monospace
             )
+            // Map icon → open CellMapper for this operator
+            if (mapUrl != null || enbUrl != null) {
+                IconButton(
+                    onClick = {
+                        openUrl(context, mapUrl ?: enbUrl!!)
+                    },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Map,
+                        contentDescription = "Open on CellMapper",
+                        tint = TechCyan,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
         }
     }
 }
@@ -455,10 +599,13 @@ fun SeenCellItem(
     nowMs: Long,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val isTdd = cell.techType == "LTE" && (cell.band == "B40" || cell.band == "B41")
     val accent = if (isTdd) TechAmber else TechCyan
     val ageSec = if (nowMs > 0 && cell.lastSeenMs > 0) ((nowMs - cell.lastSeenMs) / 1000).coerceAtLeast(0) else 0
     val ageText = if (ageSec < 2) "now" else "${ageSec}s ago"
+    val mapUrl = cellMapperMapUrl(cell.mcc, cell.mnc, cell.techType)
+    val enbUrl = cell.cellId?.let { cellMapperEnbUrl(cell.techType, it) }
 
     Row(
         modifier = modifier
@@ -508,20 +655,34 @@ fun SeenCellItem(
                 color = TextSecondary,
                 fontFamily = FontFamily.Monospace
             )
-            val idLine = buildString {
-                if (cell.cellId != null && cell.cellId > 0) append("CID ${cell.cellId}")
-                if (cell.mcc != "---" && cell.mnc != "---") {
-                    if (isNotEmpty()) append(" • ")
-                    append("PLMN ${cell.mcc}-${cell.mnc}")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (cell.cellId != null && cell.cellId > 0) {
+                    Text(
+                        text = "CID ${cell.cellId}",
+                        fontSize = 10.sp,
+                        color = if (enbUrl != null) TechCyan else TextMuted,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (enbUrl != null) FontWeight.Bold else FontWeight.Normal,
+                        modifier = if (enbUrl != null) {
+                            Modifier.clickable { openUrl(context, enbUrl) }
+                        } else Modifier
+                    )
                 }
-            }
-            if (idLine.isNotEmpty()) {
-                Text(
-                    text = idLine,
-                    fontSize = 10.sp,
-                    color = TextMuted,
-                    fontFamily = FontFamily.Monospace
-                )
+                if (cell.mcc != "---" && cell.mnc != "---") {
+                    if (cell.cellId != null && cell.cellId > 0) {
+                        Text(text = " • ", fontSize = 10.sp, color = TextMuted)
+                    }
+                    Text(
+                        text = "PLMN ${cell.mcc}-${cell.mnc}",
+                        fontSize = 10.sp,
+                        color = if (mapUrl != null) TechCyan else TextMuted,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (mapUrl != null) FontWeight.Bold else FontWeight.Normal,
+                        modifier = if (mapUrl != null) {
+                            Modifier.clickable { openUrl(context, mapUrl) }
+                        } else Modifier
+                    )
+                }
             }
             Text(
                 text = "Seen ${cell.seenCount}x • $ageText",
@@ -544,6 +705,19 @@ fun SeenCellItem(
                 color = TextMuted,
                 fontFamily = FontFamily.Monospace
             )
+            if (mapUrl != null || enbUrl != null) {
+                IconButton(
+                    onClick = { openUrl(context, mapUrl ?: enbUrl!!) },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Map,
+                        contentDescription = "Open on CellMapper",
+                        tint = TechCyan,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
         }
     }
 }

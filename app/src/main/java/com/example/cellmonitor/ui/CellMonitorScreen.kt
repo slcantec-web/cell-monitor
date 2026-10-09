@@ -441,7 +441,9 @@ private fun ServingCellTabContent(state: com.example.cellmonitor.data.CellMonito
         item {
             ServingCellCard(
                 cell = state.servingCell,
-                signal = state.signal
+                signal = state.signal,
+                mcc = state.carrier.mcc,
+                mnc = state.carrier.mnc
             )
         }
 
