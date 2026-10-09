@@ -47,7 +47,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
@@ -203,7 +202,10 @@ fun CellMonitorScreen(
                     }
 
                     // Action Controls
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         // Check for app updates
                         if (updater != null) {
                             val checking = updateState.checking
@@ -219,7 +221,7 @@ fun CellMonitorScreen(
                                 },
                                 modifier = Modifier
                                     .testTag("check_update_button")
-                                    .size(38.dp)
+                                    .size(42.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.SystemUpdate,
@@ -233,26 +235,12 @@ fun CellMonitorScreen(
                             }
                         }
 
-                        // Demo Mode Toggle Button
-                        IconButton(
-                            onClick = { repository.toggleDemoMode() },
-                            modifier = Modifier
-                                .testTag("demo_mode_button")
-                                .size(38.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Science,
-                                contentDescription = "Toggle Simulation",
-                                tint = if (state.isDemoMode) TechAmber else TextSecondary
-                            )
-                        }
-
                         // Auto-refresh Toggle Button
                         IconButton(
                             onClick = { repository.setAutoRefresh(!state.isAutoRefresh) },
                             modifier = Modifier
                                 .testTag("auto_refresh_button")
-                                .size(38.dp)
+                                .size(42.dp)
                         ) {
                             Icon(
                                 imageVector = if (state.isAutoRefresh) Icons.Default.Stop else Icons.Default.PlayArrow,
@@ -278,7 +266,7 @@ fun CellMonitorScreen(
                             onClick = { repository.refresh() },
                             modifier = Modifier
                                 .testTag("refresh_button")
-                                .size(38.dp)
+                                .size(42.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
@@ -419,11 +407,6 @@ fun CellMonitorScreen(
                                 shape = RoundedCornerShape(8.dp)
                             ) {
                                 Text("Grant Permission", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                            TextButton(
-                                onClick = { repository.toggleDemoMode() }
-                            ) {
-                                Text("Use Simulation Mode", fontSize = 12.sp, color = TechAmber)
                             }
                         }
                     }
