@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Cell Monitor — Download</title>
-  <meta name="description" content="Download Cell Monitor for Android — live cell tower, band, and multi-ISP signal metrics." />
+  <meta name="description" content="Download Cell Monitor for Android — live multi-ISP cell tower scanner with bands, PCI, CID, RSRP, neighbor cells, and signal metrics." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
@@ -34,12 +34,18 @@
     }
     .card {
       width: 100%;
-      max-width: 440px;
+      max-width: 480px;
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 20px;
       padding: 32px 28px;
       box-shadow: 0 24px 60px rgba(0,0,0,.45);
+    }
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
     }
     .badge {
       display: inline-block;
@@ -52,7 +58,15 @@
       border: 1px solid rgba(34, 211, 238, .25);
       padding: 4px 10px;
       border-radius: 999px;
-      margin-bottom: 16px;
+      text-decoration: none;
+    }
+    .badge-site {
+      color: var(--emerald);
+      background: rgba(52, 211, 153, .12);
+      border-color: rgba(52, 211, 153, .3);
+    }
+    .badge-site:hover {
+      background: rgba(52, 211, 153, .2);
     }
     h1 {
       font-size: 1.75rem;
@@ -63,8 +77,36 @@
     .sub {
       color: var(--muted);
       font-size: .95rem;
-      line-height: 1.5;
-      margin-bottom: 24px;
+      line-height: 1.55;
+      margin-bottom: 18px;
+    }
+    .features {
+      list-style: none;
+      margin-bottom: 22px;
+      display: grid;
+      gap: 8px;
+    }
+    .features li {
+      font-size: .88rem;
+      color: var(--muted);
+      line-height: 1.4;
+      padding-left: 18px;
+      position: relative;
+    }
+    .features li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 7px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(34, 211, 238, .15);
+    }
+    .features strong {
+      color: var(--text);
+      font-weight: 600;
     }
     .meta {
       display: flex;
@@ -105,13 +147,6 @@
       margin-bottom: 10px;
     }
     .btn-primary:hover { opacity: .92; }
-    .btn-ghost {
-      background: transparent;
-      color: var(--muted);
-      border: 1px solid var(--border);
-      font-weight: 600;
-      font-size: .9rem;
-    }
     .notes {
       margin-top: 20px;
       padding-top: 16px;
@@ -153,11 +188,22 @@
 </head>
 <body>
   <main class="card">
-    <div class="badge">Android APK</div>
+    <div class="badge-row">
+      <span class="badge">Android APK</span>
+      <a class="badge badge-site" href="https://cloudebase.top/" target="_blank" rel="noopener">cloudebase.top</a>
+    </div>
     <h1>Cell Monitor</h1>
     <p class="sub">
-      Live multi-ISP cell tower scanner — bands, PCI, CID, RSRP, and CellMapper links.
+      Live multi-ISP cell tower scanner for Android. See serving and neighbor cells across dual-SIM networks — bands, PCI, cell ID, signal quality, and quick links to CellMapper.
     </p>
+
+    <ul class="features">
+      <li><strong>Multi-SIM / multi-ISP</strong> — per-cell operator, MCC/MNC, and CID for every tower</li>
+      <li><strong>Serving + neighbors</strong> — tech (5G SA/NSA, LTE, 3G, 2G), band, ARFCN, PCI, RSRP/RSRQ/SINR</li>
+      <li><strong>Signal tools</strong> — live gauge, quality score, history graph, and band support checks</li>
+      <li><strong>CellMapper</strong> — open map links for the towers you see</li>
+      <li><strong>Auto-update</strong> — checks this page and prompts when a newer build is available</li>
+    </ul>
 
     <div class="meta" id="meta">
       <span>Version <strong id="ver">…</strong></span>
@@ -171,9 +217,6 @@
       </svg>
       Download APK
     </a>
-    <a class="btn btn-ghost" href="https://github.com/slcantec-web/cell-monitor" target="_blank" rel="noopener">
-      View on GitHub
-    </a>
 
     <div class="notes" id="notes-wrap" hidden>
       <h3>What’s new</h3>
@@ -186,8 +229,8 @@
     </p>
   </main>
   <footer>
-    Hosted on Cloudflare Pages · Releases on
-    <a href="https://github.com/slcantec-web/cell-monitor/releases">GitHub</a>
+    <a href="https://cloudebase.top/" target="_blank" rel="noopener">cloudebase.top</a>
+    · Hosted on Cloudflare Pages
   </footer>
 
   <script>
@@ -208,9 +251,8 @@
         }
       } catch (e) {
         document.getElementById("err").hidden = false;
-        document.getElementById("err").textContent = "Could not load version info. Try GitHub Releases.";
-        document.getElementById("download").href =
-          "https://github.com/slcantec-web/cell-monitor/releases/latest";
+        document.getElementById("err").textContent = "Could not load version info. Try again later.";
+        document.getElementById("download").href = "#";
       }
     }
     load();
