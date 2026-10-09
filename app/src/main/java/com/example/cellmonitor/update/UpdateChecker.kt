@@ -23,10 +23,60 @@ class UpdateChecker(private val context: Context) {
 
     private val prefs = context.getSharedPreferences("cell_monitor_updates", Context.MODE_PRIVATE)
 
-    private val _state = MutableStateFlow(
-        UpdateState(dismissedVersionCode = prefs.getInt(KEY_DISMISSED, 0))
-    )
+    private val _state = MutableStateFlow(initialStateFromPrefs())
     val state: StateFlow<UpdateState> = _state.asStateFlow()
+
+    private fun initialStateFromPrefs(): UpdateState {
+        val dismissed = prefs.getInt(KEY_DISMISSED, 0)
+        val cached = readCachedRemote()
+        val local = currentVersionCode()
+        val newer = cached != null && cached.versionCode > local
+        val available = newer && cached!!.versionCode > dismissed
+        return UpdateState(
+            dismissedVersionCode = dismissed,
+            remote = cached,
+            newerAvailable = newer,
+            available = available,
+            upToDate = cached != null && cached.versionCode <= local
+        )
+    }
+
+    private fun readCachedRemote(): RemoteVersion? {
+        val code = prefs.getInt(KEY_CACHED_CODE, 0)
+        if (code <= 0) return null
+        val name = prefs.getString(KEY_CACHED_NAME, null) ?: return null
+        val url = prefs.getString(KEY_CACHED_URL, null) ?: return null
+        val notes = prefs.getString(KEY_CACHED_NOTES, "") ?: ""
+        return RemoteVersion(code, name, url, notes)
+    }
+
+    private fun cacheRemote(remote: RemoteVersion) {
+        prefs.edit()
+            .putInt(KEY_CACHED_CODE, remote.versionCode)
+            .putString(KEY_CACHED_NAME, remote.versionName)
+            .putString(KEY_CACHED_URL, remote.apkUrl)
+            .putString(KEY_CACHED_NOTES, remote.releaseNotes)
+            .apply()
+    }
+
+    private fun applyRemote(remote: RemoteVersion, force: Boolean) {
+        cacheRemote(remote)
+        val local = currentVersionCode()
+        val dismissed = prefs.getInt(KEY_DISMISSED, 0)
+        val newer = remote.versionCode > local
+        val available = newer && (force || remote.versionCode > dismissed)
+        _state.update {
+            it.copy(
+                checking = false,
+                available = available,
+                newerAvailable = newer,
+                remote = remote,
+                error = null,
+                dismissedVersionCode = dismissed,
+                upToDate = !newer
+            )
+        }
+    }
 
     fun currentVersionCode(): Int {
         return try {
@@ -73,6 +123,9 @@ class UpdateChecker(private val context: Context) {
         if (!force) {
             val last = prefs.getLong(KEY_LAST_CHECK, 0L)
             if (System.currentTimeMillis() - last < UpdateConfig.CHECK_COOLDOWN_MS) {
+                // Still refresh UI from cache so banner/dialog can show without a network hit
+                val cached = readCachedRemote()
+                if (cached != null) applyRemote(cached, force = false)
                 return
             }
         }
@@ -80,33 +133,31 @@ class UpdateChecker(private val context: Context) {
         try {
             val remote = fetchRemoteVersion()
             prefs.edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply()
-            val local = currentVersionCode()
-            val dismissed = prefs.getInt(KEY_DISMISSED, 0)
-            // force check ignores dismiss so user can re-open the prompt
-            val available = remote.versionCode > local &&
-                (force || remote.versionCode > dismissed)
-            _state.update {
-                it.copy(
-                    checking = false,
-                    available = available,
-                    remote = remote,
-                    error = null,
-                    dismissedVersionCode = dismissed,
-                    upToDate = remote.versionCode <= local
-                )
-            }
+            applyRemote(remote, force = force)
         } catch (e: Exception) {
+            // Keep any cached "update available" state so the banner does not disappear offline
             _state.update {
                 it.copy(checking = false, error = e.message ?: "Update check failed")
             }
         }
     }
 
+    /** Re-open the full update dialog for the known newer version. */
+    fun showUpdateDialog() {
+        val remote = _state.value.remote ?: return
+        if (remote.versionCode <= currentVersionCode()) return
+        clearDismissed()
+        _state.update { it.copy(available = true, newerAvailable = true) }
+    }
+
     fun dismiss() {
-        val code = _state.value.remote?.versionCode ?: return
+        val remote = _state.value.remote ?: return
+        val code = remote.versionCode
         prefs.edit().putInt(KEY_DISMISSED, code).apply()
+        val stillNewer = code > currentVersionCode()
         _state.update {
-            it.copy(available = false, dismissedVersionCode = code)
+            // Keep newerAvailable so the banner stays visible after "Later"
+            it.copy(available = false, dismissedVersionCode = code, newerAvailable = stillNewer)
         }
     }
 
@@ -343,5 +394,9 @@ class UpdateChecker(private val context: Context) {
     companion object {
         private const val KEY_LAST_CHECK = "last_check_ms"
         private const val KEY_DISMISSED = "dismissed_version_code"
+        private const val KEY_CACHED_CODE = "cached_remote_code"
+        private const val KEY_CACHED_NAME = "cached_remote_name"
+        private const val KEY_CACHED_URL = "cached_remote_url"
+        private const val KEY_CACHED_NOTES = "cached_remote_notes"
     }
 }

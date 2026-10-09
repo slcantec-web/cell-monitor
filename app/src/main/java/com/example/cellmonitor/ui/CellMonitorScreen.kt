@@ -206,11 +206,15 @@ fun CellMonitorScreen(
                         // Check for app updates
                         if (updateChecker != null) {
                             val checking = updateState.checking
-                            val hasUpdate = updateState.available
+                            val hasUpdate = updateState.newerAvailable
                             IconButton(
                                 onClick = {
-                                    updateChecker.clearDismissed()
-                                    scope.launch { updateChecker.check(force = true) }
+                                    if (updateState.newerAvailable) {
+                                        updateChecker.showUpdateDialog()
+                                    } else {
+                                        updateChecker.clearDismissed()
+                                        scope.launch { updateChecker.check(force = true) }
+                                    }
                                 },
                                 modifier = Modifier
                                     .testTag("check_update_button")
@@ -360,6 +364,11 @@ fun CellMonitorScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            // In-app update notification (auto; no need to tap the toolbar icon first)
+            if (updateChecker != null) {
+                UpdateAvailableBanner(updateChecker = updateChecker)
+            }
+
             // Permission Banner (if permission is not granted)
             if (!state.isPermissionGranted && !state.isDemoMode) {
                 Box(

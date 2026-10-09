@@ -13,7 +13,13 @@ data class RemoteVersion(
 
 data class UpdateState(
     val checking: Boolean = false,
+    /** True when a newer version exists and the user has not dismissed the full dialog. */
     val available: Boolean = false,
+    /**
+     * True whenever remote versionCode > installed versionCode.
+     * Stays true even after "Later" so the in-app banner / badge can keep notifying.
+     */
+    val newerAvailable: Boolean = false,
     val remote: RemoteVersion? = null,
     val error: String? = null,
     val downloading: Boolean = false,

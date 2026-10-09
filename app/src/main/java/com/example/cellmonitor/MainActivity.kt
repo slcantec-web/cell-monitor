@@ -34,8 +34,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Cold start: always hit the network so a new release is announced without tapping anything
         lifecycleScope.launch {
-            updateChecker.check(force = false)
+            updateChecker.check(force = true)
         }
     }
 
@@ -47,6 +48,7 @@ class MainActivity : ComponentActivity() {
         }
         if (::updateChecker.isInitialized) {
             lifecycleScope.launch {
+                // Cooldown applies; cache still refreshes the in-app banner
                 updateChecker.check(force = false)
             }
         }
