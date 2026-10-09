@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cell Monitor — Download</title>
+  <meta name="description" content="Download Cell Monitor for Android — live cell tower, band, and multi-ISP signal metrics." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0b1220;
+      --card: #121a2b;
+      --border: #1e2a40;
+      --cyan: #22d3ee;
+      --emerald: #34d399;
+      --muted: #94a3b8;
+      --text: #f1f5f9;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 20% -10%, #164e63 0%, transparent 55%),
+                  radial-gradient(900px 500px at 90% 10%, #312e81 0%, transparent 50%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 440px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 32px 28px;
+      box-shadow: 0 24px 60px rgba(0,0,0,.45);
+    }
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: rgba(34, 211, 238, .12);
+      border: 1px solid rgba(34, 211, 238, .25);
+      padding: 4px 10px;
+      border-radius: 999px;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      line-height: 1.2;
+      margin-bottom: 8px;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: .95rem;
+      line-height: 1.5;
+      margin-bottom: 24px;
+    }
+    .meta {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .meta span {
+      background: rgba(255,255,255,.04);
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 8px;
+    }
+    .meta strong { color: var(--emerald); font-weight: 500; }
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 14px 18px;
+      border: none;
+      border-radius: 12px;
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      transition: transform .15s, opacity .15s;
+    }
+    .btn:active { transform: scale(.98); }
+    .btn-primary {
+      background: linear-gradient(135deg, #06b6d4, #22d3ee);
+      color: #0b1220;
+      margin-bottom: 10px;
+    }
+    .btn-primary:hover { opacity: .92; }
+    .btn-ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      font-weight: 600;
+      font-size: .9rem;
+    }
+    .notes {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      font-size: .85rem;
+      color: var(--muted);
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    .notes h3 {
+      font-size: .75rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+    .hint {
+      margin-top: 18px;
+      font-size: .78rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .hint code {
+      font-family: "JetBrains Mono", monospace;
+      font-size: .72rem;
+      background: rgba(255,255,255,.06);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    footer {
+      margin-top: 28px;
+      font-size: .75rem;
+      color: var(--muted);
+      text-align: center;
+    }
+    footer a { color: var(--cyan); text-decoration: none; }
+    .error { color: #f87171; font-size: .85rem; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="badge">Android APK</div>
+    <h1>Cell Monitor</h1>
+    <p class="sub">
+      Live multi-ISP cell tower scanner — bands, PCI, CID, RSRP, and CellMapper links.
+    </p>
+
+    <div class="meta" id="meta">
+      <span>Version <strong id="ver">…</strong></span>
+      <span>Code <strong id="code">…</strong></span>
+    </div>
+    <p class="error" id="err" hidden></p>
+
+    <a class="btn btn-primary" id="download" href="#" rel="noopener">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/>
+      </svg>
+      Download APK
+    </a>
+    <a class="btn btn-ghost" href="https://github.com/slcantec-web/cell-monitor" target="_blank" rel="noopener">
+      View on GitHub
+    </a>
+
+    <div class="notes" id="notes-wrap" hidden>
+      <h3>What’s new</h3>
+      <div id="notes"></div>
+    </div>
+
+    <p class="hint">
+      Install: allow <strong>Install unknown apps</strong> for your browser if Android asks.
+      The app checks this page for updates and will prompt you when a newer build is published.
+    </p>
+  </main>
+  <footer>
+    Hosted on Cloudflare Pages · Releases on
+    <a href="https://github.com/slcantec-web/cell-monitor/releases">GitHub</a>
+  </footer>
+
+  <script>
+    const VERSION_URL = "./version.json";
+    async function load() {
+      try {
+        const r = await fetch(VERSION_URL + "?t=" + Date.now(), { cache: "no-store" });
+        if (!r.ok) throw new Error("version.json HTTP " + r.status);
+        const v = await r.json();
+        document.getElementById("ver").textContent = v.versionName || "—";
+        document.getElementById("code").textContent = String(v.versionCode ?? "—");
+        const btn = document.getElementById("download");
+        btn.href = v.apkUrl || "#";
+        btn.setAttribute("download", "CellMonitor-" + (v.versionName || "latest") + ".apk");
+        if (v.releaseNotes) {
+          document.getElementById("notes").textContent = v.releaseNotes;
+          document.getElementById("notes-wrap").hidden = false;
+        }
+      } catch (e) {
+        document.getElementById("err").hidden = false;
+        document.getElementById("err").textContent = "Could not load version info. Try GitHub Releases.";
+        document.getElementById("download").href =
+          "https://github.com/slcantec-web/cell-monitor/releases/latest";
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

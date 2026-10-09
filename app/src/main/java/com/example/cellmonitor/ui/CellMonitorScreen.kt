@@ -113,11 +113,17 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CellMonitorScreen(
-    repository: CellMonitorRepository
+    repository: CellMonitorRepository,
+    updateChecker: com.example.cellmonitor.update.UpdateChecker? = null
 ) {
     val state by repository.state.collectAsState()
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
+
+    // Auto-update prompt (GitHub Releases / Cloudflare Pages version.json)
+    if (updateChecker != null) {
+        UpdatePromptHost(updateChecker = updateChecker)
+    }
 
     // Permission launcher
     val permissionLauncher = rememberLauncherForActivityResult(

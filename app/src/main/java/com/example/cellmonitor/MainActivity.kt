@@ -8,9 +8,12 @@ import androidx.lifecycle.lifecycleScope
 import com.example.cellmonitor.data.CellMonitorRepository
 import com.example.cellmonitor.ui.CellMonitorScreen
 import com.example.cellmonitor.ui.theme.CellMonitorTheme
+import com.example.cellmonitor.update.UpdateChecker
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var repository: CellMonitorRepository
+    private lateinit var updateChecker: UpdateChecker
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -20,11 +23,19 @@ class MainActivity : ComponentActivity() {
             context = applicationContext,
             scope = lifecycleScope
         )
+        updateChecker = UpdateChecker(applicationContext)
 
         setContent {
             CellMonitorTheme {
-                CellMonitorScreen(repository = repository)
+                CellMonitorScreen(
+                    repository = repository,
+                    updateChecker = updateChecker
+                )
             }
+        }
+
+        lifecycleScope.launch {
+            updateChecker.check(force = false)
         }
     }
 
@@ -33,6 +44,11 @@ class MainActivity : ComponentActivity() {
         if (::repository.isInitialized) {
             repository.checkPermissions()
             repository.refresh()
+        }
+        if (::updateChecker.isInitialized) {
+            lifecycleScope.launch {
+                updateChecker.check(force = false)
+            }
         }
     }
 }

@@ -1,0 +1,11 @@
+/*
+  Access-Control-Allow-Origin: *
+  X-Content-Type-Options: nosniff
+
+/version.json
+  Cache-Control: public, max-age=60, must-revalidate
+  Access-Control-Allow-Origin: *
+
+/*.apk
+  Content-Type: application/vnd.android.package-archive
+  Content-Disposition: attachment
