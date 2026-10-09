@@ -30,7 +30,7 @@ import androidx.compose.ui.window.Dialog
 import com.example.cellmonitor.ui.theme.TechCardBorder
 import com.example.cellmonitor.ui.theme.TechCardSurface
 import com.example.cellmonitor.ui.theme.TechCyan
-import com.example.cellmonitor.ui.theme.TechEmerald
+import com.example.cellmonitor.ui.theme.TechRose
 import com.example.cellmonitor.ui.theme.TextMuted
 import com.example.cellmonitor.ui.theme.TextPrimary
 import com.example.cellmonitor.update.UpdateChecker
@@ -104,7 +104,7 @@ fun UpdatePromptHost(updateChecker: UpdateChecker) {
 
             state.error?.let { err ->
                 Spacer(Modifier.height(8.dp))
-                Text(text = err, fontSize = 12.sp, color = TechEmerald)
+                Text(text = err, fontSize = 12.sp, color = TechRose, lineHeight = 16.sp)
             }
 
             Spacer(Modifier.height(18.dp))
@@ -120,9 +120,7 @@ fun UpdatePromptHost(updateChecker: UpdateChecker) {
                 }
                 Spacer(Modifier.width(4.dp))
                 TextButton(
-                    onClick = {
-                        updateChecker.openApkUrlInBrowser()
-                    },
+                    onClick = { updateChecker.openApkUrlInBrowser() },
                     enabled = !state.downloading
                 ) {
                     Text("Browser", color = TextMuted)
@@ -144,7 +142,11 @@ fun UpdatePromptHost(updateChecker: UpdateChecker) {
                     shape = RoundedCornerShape(10.dp)
                 ) {
                     Text(
-                        if (state.downloading) "Please wait…" else "Update now",
+                        when {
+                            state.downloading -> "Please wait…"
+                            state.error != null -> "Retry"
+                            else -> "Update now"
+                        },
                         fontWeight = FontWeight.Bold
                     )
                 }

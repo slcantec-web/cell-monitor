@@ -69,7 +69,6 @@ class UpdateChecker(private val context: Context) {
 
     /** Call on resume / startup. Respects cooldown unless [force]. */
     suspend fun check(force: Boolean = false) {
-        // onCreate and onResume both call this at startup; run one check at a time
         if (_state.value.checking) return
         if (!force) {
             val last = prefs.getLong(KEY_LAST_CHECK, 0L)
@@ -83,14 +82,17 @@ class UpdateChecker(private val context: Context) {
             prefs.edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply()
             val local = currentVersionCode()
             val dismissed = prefs.getInt(KEY_DISMISSED, 0)
-            val available = remote.versionCode > local && remote.versionCode > dismissed
+            // force check ignores dismiss so user can re-open the prompt
+            val available = remote.versionCode > local &&
+                (force || remote.versionCode > dismissed)
             _state.update {
                 it.copy(
                     checking = false,
                     available = available,
                     remote = remote,
                     error = null,
-                    dismissedVersionCode = dismissed
+                    dismissedVersionCode = dismissed,
+                    upToDate = remote.versionCode <= local
                 )
             }
         } catch (e: Exception) {
@@ -119,42 +121,42 @@ class UpdateChecker(private val context: Context) {
      */
     suspend fun downloadAndInstall(): Boolean = withContext(Dispatchers.IO) {
         val remote = _state.value.remote ?: return@withContext false
+        if (!canRequestInstallPackages()) {
+            _state.update {
+                it.copy(
+                    error = "Allow “Install unknown apps” for Cell Monitor, then tap Update again."
+                )
+            }
+            return@withContext false
+        }
         _state.update { it.copy(downloading = true, downloadProgress = 0, error = null) }
         try {
             val dest = File(context.cacheDir, "CellMonitor-update.apk")
             if (dest.exists()) dest.delete()
 
-            val conn = (URL(remote.apkUrl).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 20_000
-                readTimeout = 60_000
-                instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "CellMonitor-Updater")
+            downloadToFile(remote.apkUrl, dest) { pct ->
+                _state.update { it.copy(downloadProgress = pct) }
             }
-            conn.connect()
-            if (conn.responseCode !in 200..299) {
-                throw IllegalStateException("Download HTTP ${conn.responseCode}")
+
+            // Basic integrity: APK is a ZIP starting with PK
+            val header = dest.inputStream().use { it.readNBytes(4) }
+            if (header.size < 2 || header[0] != 'P'.code.toByte() || header[1] != 'K'.code.toByte()) {
+                throw IllegalStateException("Downloaded file is not a valid APK")
             }
-            val total = conn.contentLengthLong.coerceAtLeast(0L)
-            conn.inputStream.use { input ->
-                FileOutputStream(dest).use { out ->
-                    val buf = ByteArray(32 * 1024)
-                    var read: Int
-                    var done = 0L
-                    while (input.read(buf).also { read = it } != -1) {
-                        out.write(buf, 0, read)
-                        done += read
-                        if (total > 0) {
-                            val pct = ((done * 100) / total).toInt().coerceIn(0, 100)
-                            _state.update { it.copy(downloadProgress = pct) }
-                        }
-                    }
-                }
+            if (dest.length() < 50_000L) {
+                throw IllegalStateException("Downloaded APK is too small (${dest.length()} bytes)")
             }
+
             _state.update { it.copy(downloadProgress = 100) }
             withContext(Dispatchers.Main) {
                 installApk(dest)
             }
-            _state.update { it.copy(downloading = false) }
+            _state.update {
+                it.copy(
+                    downloading = false,
+                    error = "Installer opened. If it says “App not installed”, uninstall the old app once (different signing key), then install this APK again."
+                )
+            }
             true
         } catch (e: Exception) {
             _state.update {
@@ -162,6 +164,52 @@ class UpdateChecker(private val context: Context) {
             }
             false
         }
+    }
+
+    /** Follow redirects manually (GitHub → release-assets CDN). */
+    private fun downloadToFile(urlStr: String, dest: File, onProgress: (Int) -> Unit) {
+        var current = urlStr
+        var redirects = 0
+        while (redirects < 8) {
+            val conn = (URL(current).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 20_000
+                readTimeout = 120_000
+                instanceFollowRedirects = false
+                setRequestProperty("User-Agent", "CellMonitor-Updater")
+                setRequestProperty("Accept", "*/*")
+            }
+            conn.connect()
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val loc = conn.getHeaderField("Location")
+                    ?: throw IllegalStateException("Redirect $code with no Location")
+                current = if (loc.startsWith("http")) loc else URL(URL(current), loc).toString()
+                conn.disconnect()
+                redirects++
+                continue
+            }
+            if (code !in 200..299) {
+                throw IllegalStateException("Download HTTP $code")
+            }
+            val total = conn.contentLengthLong.coerceAtLeast(0L)
+            conn.inputStream.use { input ->
+                FileOutputStream(dest).use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    var read: Int
+                    var done = 0L
+                    while (input.read(buf).also { read = it } != -1) {
+                        out.write(buf, 0, read)
+                        done += read
+                        if (total > 0) {
+                            onProgress(((done * 100) / total).toInt().coerceIn(0, 100))
+                        }
+                    }
+                }
+            }
+            conn.disconnect()
+            return
+        }
+        throw IllegalStateException("Too many redirects downloading APK")
     }
 
     fun openApkUrlInBrowser() {
@@ -194,14 +242,25 @@ class UpdateChecker(private val context: Context) {
         )
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+            )
+        }
+        // Grant to package installer packages that may handle the intent
+        val resInfo = context.packageManager.queryIntentActivities(intent, 0)
+        for (ri in resInfo) {
+            context.grantUriPermission(
+                ri.activityInfo.packageName,
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
         }
         context.startActivity(intent)
     }
 
     private suspend fun fetchRemoteVersion(): RemoteVersion = withContext(Dispatchers.IO) {
-        // Ask BOTH sources and use the newer one. A static version.json that nobody
-        // updated must never hide a newer GitHub release.
         var pages: RemoteVersion? = null
         var pagesError: Exception? = null
         try {
@@ -263,9 +322,7 @@ class UpdateChecker(private val context: Context) {
                 }
             }
         }
-        // A release page without an attached .apk cannot be installed - do not offer it as an update
         val finalApkUrl = apkUrl ?: throw IllegalStateException("Release $tag has no .apk asset")
-        // Prefer versionCode from tag like 1.2.3 → 10203; else use published timestamp order via name
         val code = tag.split(".").mapNotNull { it.toIntOrNull() }.let { p ->
             when (p.size) {
                 3 -> p[0] * 10000 + p[1] * 100 + p[2]

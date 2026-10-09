@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -72,6 +73,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -106,6 +108,7 @@ import com.example.cellmonitor.ui.theme.TechRose
 import com.example.cellmonitor.ui.theme.TextMuted
 import com.example.cellmonitor.ui.theme.TextPrimary
 import com.example.cellmonitor.ui.theme.TextSecondary
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -119,11 +122,15 @@ fun CellMonitorScreen(
     val state by repository.state.collectAsState()
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
 
     // Auto-update prompt (GitHub Releases / Cloudflare Pages version.json)
     if (updateChecker != null) {
         UpdatePromptHost(updateChecker = updateChecker)
     }
+    val updateState by (updateChecker?.state ?: kotlinx.coroutines.flow.MutableStateFlow(
+        com.example.cellmonitor.update.UpdateState()
+    )).collectAsState()
 
     // Permission launcher
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -176,12 +183,18 @@ fun CellMonitorScreen(
                             }
                         }
 
-                        // Last updated timestamp
+                        // Last updated timestamp + app version
                         val timeStr = if (state.lastUpdatedMs > 0) {
                             SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(state.lastUpdatedMs))
                         } else "Updating..."
+                        val versionLabel = if (updateChecker != null) {
+                            "v${updateChecker.currentVersionName()} (${updateChecker.currentVersionCode()})"
+                        } else null
                         Text(
-                            text = "Last sync: $timeStr",
+                            text = buildString {
+                                append("Last sync: $timeStr")
+                                if (versionLabel != null) append("  ·  $versionLabel")
+                            },
                             fontSize = 11.sp,
                             color = TextMuted,
                             fontFamily = FontFamily.Monospace
@@ -190,6 +203,31 @@ fun CellMonitorScreen(
 
                     // Action Controls
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Check for app updates
+                        if (updateChecker != null) {
+                            val checking = updateState.checking
+                            val hasUpdate = updateState.available
+                            IconButton(
+                                onClick = {
+                                    updateChecker.clearDismissed()
+                                    scope.launch { updateChecker.check(force = true) }
+                                },
+                                modifier = Modifier
+                                    .testTag("check_update_button")
+                                    .size(38.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SystemUpdate,
+                                    contentDescription = "Check for updates",
+                                    tint = when {
+                                        hasUpdate -> TechCyan
+                                        checking -> TechAmber
+                                        else -> TextSecondary
+                                    }
+                                )
+                            }
+                        }
+
                         // Demo Mode Toggle Button
                         IconButton(
                             onClick = { repository.toggleDemoMode() },

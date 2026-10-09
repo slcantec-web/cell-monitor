@@ -18,5 +18,7 @@ data class UpdateState(
     val error: String? = null,
     val downloading: Boolean = false,
     val downloadProgress: Int = 0, // 0–100
-    val dismissedVersionCode: Int = 0
+    val dismissedVersionCode: Int = 0,
+    /** True after a successful check when remote <= local */
+    val upToDate: Boolean = false
 )
