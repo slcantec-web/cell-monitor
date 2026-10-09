@@ -1,8 +1,8 @@
 {
-  "versionCode": 10001,
-  "versionName": "1.0.1",
-  "apkUrl": "https://github.com/slcantec-web/cell-monitor/releases/download/1.0.1/Cellmonitor.apk",
-  "releaseNotes": "Bug Fix",
+  "versionCode": 10002,
+  "versionName": "1.0.2",
+  "apkUrl": "https://github.com/slcantec-web/cell-monitor/releases/latest/download/CellMonitor.apk",
+  "releaseNotes": "Cell Monitor 1.0.2",
   "minSdk": 30,
-  "publishedAt": "2026-10-09T05:31:00Z"
+  "publishedAt": "2026-10-09T09:37:45Z"
 }
