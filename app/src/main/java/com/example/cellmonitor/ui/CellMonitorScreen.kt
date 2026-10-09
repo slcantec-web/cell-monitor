@@ -599,6 +599,13 @@ private fun NeighborsTabContent(
     state: com.example.cellmonitor.data.CellMonitorState,
     onClearSeen: () -> Unit
 ) {
+    // Must be computed here (composable scope), not inside the LazyColumn builder lambda.
+    val seenSorted = remember(state.seenCells) {
+        state.seenCells.sortedWith(
+            compareByDescending<SeenCell> { it.techType == "LTE" && (it.band == "B40" || it.band == "B41") }
+                .thenByDescending { it.bestRsrp ?: -999 }
+        )
+    }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -656,7 +663,7 @@ private fun NeighborsTabContent(
         } else {
             items(
                 items = state.neighbors,
-                key = { n -> "${n.techType}-${n.pci}-${n.arfcn}-${n.band}" },
+                key = { n -> "${n.operatorName}|${n.techType}|${n.band}|${n.arfcn}|${n.pci}|${n.cellId ?: 0}|${n.simSlot ?: -1}" },
                 contentType = { "neighbor" }
             ) { neighbor ->
                 NeighborCellItem(neighbor = neighbor)
@@ -664,12 +671,6 @@ private fun NeighborsTabContent(
         }
 
         // ---- Running log of every cell seen since last clear ----
-        val seenSorted = remember(state.seenCells) {
-            state.seenCells.sortedWith(
-                compareByDescending<SeenCell> { it.techType == "LTE" && (it.band == "B40" || it.band == "B41") }
-                    .thenByDescending { it.bestRsrp ?: -999 }
-            )
-        }
         item {
             Row(
                 modifier = Modifier
@@ -704,7 +705,7 @@ private fun NeighborsTabContent(
         } else {
             items(
                 items = seenSorted,
-                key = { c -> "${c.techType}-${c.pci}-${c.arfcn}-${c.band}" },
+                key = { c -> "${c.operatorName}|${c.techType}|${c.band}|${c.arfcn}|${c.pci}|${c.cellId ?: 0}" },
                 contentType = { "seen" }
             ) { cell ->
                 SeenCellItem(cell = cell, nowMs = state.lastUpdatedMs)
