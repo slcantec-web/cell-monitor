@@ -79,7 +79,11 @@ data class NeighborCell(
     val mcc: String = "---",
     val mnc: String = "---",
     /** Full cell identity (ECI / NCI / etc.) when available. */
-    val cellId: Long? = null
+    val cellId: Long? = null,
+    /** SIM slot (0-based) when the cell was reported by a SIM other than the data SIM. */
+    val simSlot: Int? = null,
+    /** True when this cell is the serving cell of that other SIM. */
+    val servingOnSim: Boolean = false
 )
 
 data class SeenCell(
@@ -110,6 +114,8 @@ data class CellMonitorState(
     val isAutoRefresh: Boolean = false,
     val refreshIntervalSec: Int = 2,
     val isDemoMode: Boolean = false,
+    /** False when the phone's Location switch is off (Android then returns no cell info). */
+    val locationEnabled: Boolean = true,
     val isRefreshing: Boolean = false,
     val lastUpdatedMs: Long = 0L,
     val carrier: CarrierInfo = CarrierInfo(),

@@ -1,0 +1,146 @@
+name: Release APK + update site
+
+# Publishes the APK as a GitHub Release and updates web/version.json (served by Cloudflare Pages),
+# which is what the in-app updater reads.
+#   Tag push:   git tag v1.1.0 && git push origin v1.1.0
+#   Manual:     Actions -> "Release APK + update site" -> Run workflow (enter 1.1.0)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      versionName:
+        description: "Version name, e.g. 1.1.0 (must increase)"
+        required: true
+      notes:
+        description: "Release notes"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-apk
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Work out version from tag / input
+        id: v
+        env:
+          INPUT_NAME: ${{ github.event.inputs.versionName }}
+          INPUT_NOTES: ${{ github.event.inputs.notes }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            NAME="${GITHUB_REF_NAME#v}"
+            NOTES="$(git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents)')"
+          else
+            NAME="${INPUT_NAME#v}"
+            NOTES="$INPUT_NOTES"
+          fi
+          if ! [[ "$NAME" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::Version must look like 1.2.3 (got '$NAME')"
+            exit 1
+          fi
+          # Same formula as UpdateChecker.parseGithubRelease(): 1.2.3 -> 10203
+          CODE=$(( BASH_REMATCH[1] * 10000 + BASH_REMATCH[2] * 100 + BASH_REMATCH[3] ))
+          [ -n "$NOTES" ] || NOTES="Cell Monitor $NAME"
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.txt"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NAME" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Restore the signing keystore (must be the SAME key every release)
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::error::Secret KEYSTORE_BASE64 is missing. Android only installs an update over the existing app if every build is signed with the same key. See web/README.md (Signing key)."
+            exit 1
+          fi
+          echo "$KS_B64" | base64 -d > debug.keystore
+
+      - name: Build APK
+        env:
+          CM_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          CM_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          CM_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          APP_NAME: ${{ steps.v.outputs.name }}
+          APP_CODE: ${{ steps.v.outputs.code }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon -PappVersionName="$APP_NAME" -PappVersionCode="$APP_CODE"
+          cp app/build/outputs/apk/debug/app-debug.apk CellMonitor.apk
+
+      - name: Sanity-check the APK (version, INTERNET permission)
+        env:
+          APP_NAME: ${{ steps.v.outputs.name }}
+          APP_CODE: ${{ steps.v.outputs.code }}
+        run: |
+          AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/aapt2"
+          "$AAPT2" dump badging CellMonitor.apk > badging.txt
+          grep "^package:" badging.txt
+          grep -q "versionCode='$APP_CODE'" badging.txt || { echo "::error::versionCode in the APK is not $APP_CODE"; exit 1; }
+          grep -q "versionName='$APP_NAME'" badging.txt || { echo "::error::versionName in the APK is not $APP_NAME"; exit 1; }
+          grep -q "uses-permission: name='android.permission.INTERNET'" badging.txt || { echo "::error::APK lacks INTERNET permission"; exit 1; }
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+          APP_NAME: ${{ steps.v.outputs.name }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" CellMonitor.apk --clobber
+          else
+            gh release create "$TAG" CellMonitor.apk --target "$GITHUB_SHA" \
+              --title "Cell Monitor $APP_NAME" --notes-file "$RUNNER_TEMP/notes.txt"
+          fi
+
+      - name: Update web/version.json on main (Cloudflare Pages redeploys)
+        env:
+          APP_NAME: ${{ steps.v.outputs.name }}
+          APP_CODE: ${{ steps.v.outputs.code }}
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+          python3 - <<'PY'
+          import datetime, json, os
+          notes = open(os.path.join(os.environ["RUNNER_TEMP"], "notes.txt")).read().strip()
+          data = {
+              "versionCode": int(os.environ["APP_CODE"]),
+              "versionName": os.environ["APP_NAME"],
+              "apkUrl": "https://github.com/%s/releases/latest/download/CellMonitor.apk" % os.environ["GITHUB_REPOSITORY"],
+              "releaseNotes": notes,
+              "minSdk": 30,
+              "publishedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+          }
+          with open("web/version.json", "w") as f:
+              json.dump(data, f, indent=2)
+              f.write("\n")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/version.json
+          git commit -m "chore: publish $APP_NAME to the update site" || echo "version.json unchanged"
+          git push origin main
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f debug.keystore

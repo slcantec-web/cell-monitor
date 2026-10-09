@@ -9,15 +9,18 @@ android {
         applicationId = "com.aistudio.cellmonitor.qvkpzt"
         minSdk = 30
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // CI passes -PappVersionCode / -PappVersionName (derived from the release tag) so the
+        // installed app's versionCode matches what the update checker compares against.
+        versionCode = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
+        versionName = (project.findProperty("appVersionName") as String?) ?: "1.0"
     }
     signingConfigs {
         create("debugConfig") {
             storeFile = file("${rootDir}/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            // Release CI supplies the real (stable) key through these variables
+            storePassword = System.getenv("CM_STORE_PASSWORD") ?: "android"
+            keyAlias = System.getenv("CM_KEY_ALIAS") ?: "androiddebugkey"
+            keyPassword = System.getenv("CM_KEY_PASSWORD") ?: "android"
         }
     }
     buildTypes {

@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -25,9 +26,13 @@ import android.telephony.SubscriptionManager
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyDisplayInfo
 import android.telephony.TelephonyManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +40,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import kotlin.random.Random
 
 class CellMonitorRepository(
@@ -48,6 +57,9 @@ class CellMonitorRepository(
     val state: StateFlow<CellMonitorState> = _state.asStateFlow()
 
     private var autoRefreshJob: Job? = null
+
+    // Declared before init{} on purpose: init starts a refresh coroutine that uses it.
+    private val refreshMutex = Mutex()
 
     // --- Running log of every cell the phone has reported since the last clear ---
     private data class CellObservation(
@@ -167,13 +179,22 @@ class CellMonitorRepository(
     init {
         checkPermissions()
         refresh()
+        // The seen-cells log, TDD check and band check only fill while refreshing,
+        // so scanning starts automatically (the play/stop button still controls it).
+        setAutoRefresh(true)
     }
 
     fun checkPermissions(): Boolean {
         val fineLocation = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val phoneState = context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
         val granted = fineLocation && phoneState
-        _state.update { it.copy(isPermissionGranted = granted) }
+        // With the Location switch off Android returns an empty cell list.
+        val locationOn = try {
+            (context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager)?.isLocationEnabled ?: true
+        } catch (e: Exception) {
+            true
+        }
+        _state.update { it.copy(isPermissionGranted = granted, locationEnabled = locationOn) }
         if (phoneState) registerDisplayListener()
         return granted
     }
@@ -214,41 +235,114 @@ class CellMonitorRepository(
         }
     }
 
+    /** One active SIM / subscription and the TelephonyManager bound to it. */
+    private class SimSource(
+        val tm: TelephonyManager,
+        val subId: Int,
+        val slot: Int,
+        val isData: Boolean
+    )
+
+    /** A CellInfo tagged with the SIM that reported it (and that SIM's registered PLMN). */
+    private class SimCell(
+        val info: CellInfo,
+        val slot: Int,
+        val isData: Boolean,
+        val fbMcc: String,
+        val fbMnc: String
+    )
+
+    private fun looksLikeEmulator(): Boolean =
+        Build.FINGERPRINT.startsWith("generic") ||
+            Build.FINGERPRINT.contains("emulator") ||
+            Build.MODEL.contains("Emulator") ||
+            Build.MODEL.contains("Android SDK built for") ||
+            Build.HARDWARE.contains("goldfish") ||
+            Build.HARDWARE.contains("ranchu") ||
+            Build.PRODUCT.contains("sdk_gphone")
+
     /**
-     * Returns TelephonyManagers for every active subscription (dual-SIM etc.).
-     * Falls back to the default manager if SubscriptionManager is unavailable.
+     * Every active subscription (dual-SIM etc.) with its own TelephonyManager.
+     * Exactly one entry is flagged as the data SIM; it drives the serving cell and carrier card.
      */
     @SuppressLint("MissingPermission")
-    private fun telephonyManagersForAllSims(): List<TelephonyManager> {
+    private fun simSources(): List<SimSource> {
         val defaultTm = telephonyManager ?: return emptyList()
-        val result = LinkedHashMap<Int, TelephonyManager>() // subId -> tm
+        val result = ArrayList<SimSource>()
         try {
             val sm = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
+            val dataSubId = SubscriptionManager.getDefaultDataSubscriptionId()
             val subs = sm?.activeSubscriptionInfoList
             if (!subs.isNullOrEmpty()) {
                 for (info in subs) {
-                    val subId = info.subscriptionId
                     val tmForSub = try {
-                        defaultTm.createForSubscriptionId(subId)
-                    } catch (_: Exception) {
+                        defaultTm.createForSubscriptionId(info.subscriptionId)
+                    } catch (e: Exception) {
                         null
                     }
-                    if (tmForSub != null) {
-                        result[subId] = tmForSub
-                    }
+                    if (tmForSub == null) continue
+                    result.add(
+                        SimSource(tmForSub, info.subscriptionId, info.simSlotIndex, info.subscriptionId == dataSubId)
+                    )
                 }
             }
-        } catch (_: Exception) {
-            // ignore – fall through to default
+        } catch (e: Exception) {
+            // fall through to the default manager
         }
         if (result.isEmpty()) {
-            result[-1] = defaultTm
+            result.add(SimSource(defaultTm, -1, 0, true))
+        } else if (result.none { it.isData }) {
+            // Default data subscription unknown: treat the first SIM as the data SIM
+            val first = result[0]
+            result[0] = SimSource(first.tm, first.subId, first.slot, true)
         }
-        return result.values.toList()
+        return result
+    }
+
+    /**
+     * Fresh cell info for one SIM. Waits for the radio callback, but never longer than 4 s
+     * so a missing callback cannot leave the app stuck in "refreshing".
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun cellInfoFor(src: SimSource): List<CellInfo> {
+        val tm = src.tm
+        val fresh: List<CellInfo>? = withTimeoutOrNull(4000L) {
+            suspendCancellableCoroutine<List<CellInfo>?> { cont ->
+                try {
+                    tm.requestCellInfoUpdate(context.mainExecutor, object : TelephonyManager.CellInfoCallback() {
+                        override fun onCellInfo(cellInfo: MutableList<CellInfo>) {
+                            if (cont.isActive) cont.resume(cellInfo)
+                        }
+
+                        override fun onError(errorCode: Int, detail: Throwable?) {
+                            if (cont.isActive) cont.resume(null)
+                        }
+                    })
+                } catch (e: Exception) {
+                    if (cont.isActive) cont.resume(null)
+                }
+            }
+        }
+        if (fresh != null) return fresh
+        return try {
+            tm.allCellInfo ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private suspend fun refreshInternal() {
+        // One scan at a time: manual refresh, auto refresh and display-info callbacks can overlap.
+        if (!refreshMutex.tryLock()) return
+        try {
+            refreshLocked()
+        } finally {
+            refreshMutex.unlock()
+        }
     }
 
     @SuppressLint("MissingPermission")
-    private fun refreshInternal() {
+    private suspend fun refreshLocked() {
         _state.update { it.copy(isRefreshing = true) }
 
         if (!checkPermissions()) {
@@ -265,77 +359,24 @@ class CellMonitorRepository(
             return
         }
 
-        val managers = telephonyManagersForAllSims()
-        if (managers.isEmpty()) {
-            simulateCellData()
+        val sources = simSources()
+        if (sources.isEmpty()) {
+            // No telephony hardware. Never fabricate data while the screen says LIVE.
+            _state.update { it.copy(isRefreshing = false) }
             return
         }
 
-        // Collect cell info from every SIM / subscription so we see all ISPs the radio reports
-        val merged = LinkedHashMap<String, CellInfo>() // dedupe key -> CellInfo
-        val lock = Any()
-
-        fun addCells(list: List<CellInfo>?) {
-            list?.forEach { cell ->
-                val key = cellDedupeKey(cell)
-                if (key.isNotEmpty()) {
-                    synchronized(lock) { merged[key] = cell }
-                }
-            }
-        }
-
-        val pending = java.util.concurrent.atomic.AtomicInteger(0)
-        var usedAsync = false
-
-        fun finishIfDone() {
-            if (pending.get() <= 0) {
-                val snapshot: List<CellInfo>
-                synchronized(lock) { snapshot = merged.values.toList() }
-                processCellInfo(snapshot)
-            }
-        }
-
         try {
-            for (tm in managers) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    usedAsync = true
-                    pending.incrementAndGet()
-                    try {
-                        tm.requestCellInfoUpdate(context.mainExecutor, object : TelephonyManager.CellInfoCallback() {
-                            override fun onCellInfo(cellInfo: MutableList<CellInfo>) {
-                                addCells(cellInfo)
-                                pending.decrementAndGet()
-                                finishIfDone()
-                            }
-
-                            override fun onError(errorCode: Int, detail: Throwable?) {
-                                addCells(tm.allCellInfo)
-                                pending.decrementAndGet()
-                                finishIfDone()
-                            }
-                        })
-                    } catch (_: Exception) {
-                        addCells(tm.allCellInfo)
-                        pending.decrementAndGet()
-                    }
-                } else {
-                    addCells(tm.allCellInfo)
-                }
+            // Ask every SIM at the same time and process once, when all of them answered.
+            val perSim = coroutineScope {
+                sources.map { src -> async { src to cellInfoFor(src) } }.awaitAll()
             }
-            if (!usedAsync) {
-                val snapshot: List<CellInfo>
-                synchronized(lock) { snapshot = merged.values.toList() }
-                processCellInfo(snapshot)
-            } else if (pending.get() <= 0) {
-                val snapshot: List<CellInfo>
-                synchronized(lock) { snapshot = merged.values.toList() }
-                processCellInfo(snapshot)
-            }
-        } catch (e: SecurityException) {
+            processCellInfo(perSim)
+        } catch (e: CancellationException) {
             _state.update { it.copy(isRefreshing = false) }
+            throw e
         } catch (e: Exception) {
-            // Last-resort: single default manager
-            processCellInfo(telephonyManager?.allCellInfo ?: emptyList())
+            _state.update { it.copy(isRefreshing = false) }
         }
     }
 
@@ -364,17 +405,33 @@ class CellMonitorRepository(
         }
     }
 
-    /** Registered network PLMN from the default TelephonyManager (fallback when cell identity omits MCC/MNC). */
+    /** Registered network PLMN of one SIM (fallback when a cell identity omits MCC/MNC). */
     @SuppressLint("MissingPermission")
-    private fun registeredPlmnFallback(): Pair<String, String> {
-        val raw = telephonyManager?.networkOperator.orEmpty()
+    private fun plmnOf(tm: TelephonyManager?): Pair<String, String> {
+        val raw = tm?.networkOperator.orEmpty()
         val mcc = if (raw.length >= 3) raw.substring(0, 3) else "---"
         val mnc = if (raw.length > 3) raw.substring(3) else "---"
         return mcc to mnc
     }
 
-    /** Extract MCC/MNC/operator from a CellIdentity when the platform exposes them. */
-    private fun plmnFromIdentity(identity: Any?): Triple<String, String, String> {
+    /** "B3", "B40"... from the EARFCN table, or from the identity's own band list for bands the table lacks. */
+    private fun lteBand(id: CellIdentityLte): String {
+        val fromTable = BandCalculators.getLteBandString(id.earfcn)
+        if (fromTable != "B?" && fromTable != "---") return fromTable
+        val b = try {
+            id.bands.firstOrNull()
+        } catch (e: Exception) {
+            null
+        }
+        return if (b != null && b > 0 && b != Int.MAX_VALUE) "B$b" else fromTable
+    }
+
+    /**
+     * Extract MCC/MNC/operator from a CellIdentity when the platform exposes them.
+     * [fallback] is the registered PLMN of the SIM that reported the cell, so a second SIM's
+     * cells are never labelled with the first SIM's operator.
+     */
+    private fun plmnFromIdentity(identity: Any?, fallback: Pair<String, String>): Triple<String, String, String> {
         var mcc = "---"
         var mnc = "---"
         when (identity) {
@@ -403,27 +460,51 @@ class CellMonitorRepository(
                 }
             }
         }
-        // Many devices omit MCC/MNC on neighbor CellIdentity; fall back to registered PLMN
+        // Many devices omit MCC/MNC on neighbor CellIdentity; use the reporting SIM's PLMN
         if (mcc == "---" || mnc == "---") {
-            val (fbMcc, fbMnc) = registeredPlmnFallback()
-            if (mcc == "---") mcc = fbMcc
-            if (mnc == "---") mnc = fbMnc
+            if (mcc == "---") mcc = fallback.first
+            if (mnc == "---") mnc = fallback.second
         }
         val op = OperatorNames.resolve(null, mcc, mnc)
         return Triple(mcc, mnc, op)
     }
 
     @SuppressLint("MissingPermission")
-    private fun processCellInfo(cells: List<CellInfo>) {
-        val tm = telephonyManager
+    private fun processCellInfo(perSim: List<Pair<SimSource, List<CellInfo>>>) {
+        // The data SIM drives the serving cell and the carrier card
+        val primary = perSim.firstOrNull { it.first.isData } ?: perSim.firstOrNull()
+        val tm = primary?.first?.tm ?: telephonyManager
 
-        // If no hardware cell towers are detected (typical on emulator without SIM),
-        // we can check if all cells are empty.
-        if (cells.isEmpty() && _state.value.servingCell == null) {
-            // Check if user is in an emulator/no SIM environment
+        // Tag every cell with the SIM that reported it. If two SIMs report the same physical
+        // cell keep the registered copy, then the copy from the data SIM.
+        val tagged = LinkedHashMap<String, SimCell>()
+        for ((src, list) in perSim) {
+            val (fbMcc, fbMnc) = plmnOf(src.tm)
+            for (c in list) {
+                val key = cellDedupeKey(c)
+                if (key.isEmpty()) continue
+                val old = tagged[key]
+                val better = old == null ||
+                    (!old.info.isRegistered && c.isRegistered) ||
+                    (old.info.isRegistered == c.isRegistered && !old.isData && src.isData)
+                if (better) tagged[key] = SimCell(c, src.slot, src.isData, fbMcc, fbMnc)
+            }
+        }
+        val cells = tagged.values.map { it.info }
+        val simOf = java.util.IdentityHashMap<CellInfo, SimCell>()
+        tagged.values.forEach { simOf[it.info] = it }
+
+        fun fromData(c: CellInfo): Boolean = simOf[c]?.isData != false
+        fun fallbackOf(c: CellInfo): Pair<String, String> =
+            simOf[c]?.let { it.fbMcc to it.fbMnc } ?: plmnOf(tm)
+        /** SIM slot (0-based) when the cell came from a SIM other than the data SIM. */
+        fun otherSlot(c: CellInfo): Int? = simOf[c]?.takeIf { !it.isData && it.slot >= 0 }?.slot
+
+        // Only the emulator may fall back to simulated data. On a real phone an empty list
+        // means "nothing reported" (location off, no signal...) and must be shown as such.
+        if (cells.isEmpty() && _state.value.servingCell == null && looksLikeEmulator()) {
             val operator = tm?.networkOperatorName.orEmpty()
             if (operator.isBlank() || operator.equals("Android", ignoreCase = true)) {
-                // Auto enable demo mode so emulator displays rich UI instead of blank
                 _state.update { it.copy(isDemoMode = true) }
                 simulateCellData()
                 return
@@ -437,10 +518,12 @@ class CellMonitorRepository(
         val wcdmaCells = cells.filterIsInstance<CellInfoWcdma>()
         val gsmCells = cells.filterIsInstance<CellInfoGsm>()
 
-        val registeredLte = lteCells.firstOrNull { it.isRegistered }
-        val registeredNr = nrCells.firstOrNull { it.isRegistered }
-        val registeredWcdma = wcdmaCells.firstOrNull { it.isRegistered }
-        val registeredGsm = gsmCells.firstOrNull { it.isRegistered }
+        // Serving = registered cell of the DATA SIM. The other SIM's registered cells stay in
+        // the neighbor list (tagged with their SIM) instead of disappearing.
+        val registeredLte = lteCells.firstOrNull { it.isRegistered && fromData(it) }
+        val registeredNr = nrCells.firstOrNull { it.isRegistered && fromData(it) }
+        val registeredWcdma = wcdmaCells.firstOrNull { it.isRegistered && fromData(it) }
+        val registeredGsm = gsmCells.firstOrNull { it.isRegistered && fromData(it) }
 
         val isNrConnected = registeredNr != null || displayIs5g || (try {
             tm?.serviceState?.toString()?.contains("nrState=CONNECTED") == true
@@ -448,7 +531,11 @@ class CellMonitorRepository(
             false
         })
 
-        val nrServing = registeredNr ?: if (isNrConnected) nrCells.firstOrNull() else null
+        // NSA: the NR leg is usually not "registered"; pick the cell flagged as secondary serving
+        val nrServing = registeredNr ?: if (isNrConnected) {
+            nrCells.firstOrNull { fromData(it) && it.cellConnectionStatus == CellInfo.CONNECTION_SECONDARY_SERVING }
+                ?: nrCells.firstOrNull { fromData(it) }
+        } else null
 
         val tech = when {
             registeredNr != null && registeredLte == null -> RadioTech.NR_SA
@@ -459,7 +546,7 @@ class CellMonitorRepository(
             else -> RadioTech.UNKNOWN
         }
 
-        // Build Carrier Info
+        // Build Carrier Info (data SIM)
         // networkOperator / networkOperatorName = currently registered network
         // simOperator / simOperatorName = SIM home network
         val rawPlmn = tm?.networkOperator.orEmpty()
@@ -515,7 +602,7 @@ class CellMonitorRepository(
             val band = id?.bands?.firstOrNull() ?: 0
             val nrarfcn = id?.nrarfcn ?: 0
             val pci = id?.pci ?: 0
-            val nci = id?.nci ?: 0L
+            val nci = id?.nci?.takeIf { it != Long.MAX_VALUE } ?: 0L
             val tac = id?.tac ?: 0
 
             val rsrp = strength?.ssRsrp?.takeIf { it != Int.MAX_VALUE && it in -140..-44 }
@@ -554,7 +641,7 @@ class CellMonitorRepository(
             val strength = registeredLte.cellSignalStrength as CellSignalStrengthLte
             val earfcn = id.earfcn
             val pci = id.pci
-            val ci = id.ci.toLong()
+            val ci = id.ci.takeIf { it != Int.MAX_VALUE }?.toLong() ?: 0L
             val tac = id.tac
 
             val rsrp = strength.rsrp.takeIf { it != Int.MAX_VALUE && it in -140..-44 }
@@ -567,7 +654,7 @@ class CellMonitorRepository(
 
             servingCell = ServingCell(
                 tech = tech,
-                band = BandCalculators.getLteBandString(earfcn),
+                band = lteBand(id),
                 bandName = BandCalculators.getLteBandName(earfcn),
                 duplex = BandCalculators.getLteDuplex(earfcn),
                 frequencyMhz = BandCalculators.calculateLteFrequencyMhz(earfcn),
@@ -595,21 +682,22 @@ class CellMonitorRepository(
             )
         }
 
-        // Parse Neighbor Cells (all non-registered cells from every ISP the radio reported)
+        // Parse Neighbor Cells: every reported cell except the data SIM's serving cell(s),
+        // so the second SIM's serving cell shows up too (tagged with its SIM slot).
         val neighborsList = mutableListOf<NeighborCell>()
         val servingRsrp = signalMetrics.rsrp
 
-        lteCells.filter { !it.isRegistered }.forEach { lte ->
+        lteCells.filter { it !== registeredLte }.forEach { lte ->
             val id = lte.cellIdentity
             val str = lte.cellSignalStrength
             val rsrp = str.rsrp.takeIf { it != Int.MAX_VALUE && it in -140..-44 }
             val delta = if (rsrp != null && servingRsrp != null) rsrp - servingRsrp else null
-            val (mcc, mnc, op) = plmnFromIdentity(id)
+            val (mcc, mnc, op) = plmnFromIdentity(id, fallbackOf(lte))
             val ci = id.ci.takeIf { it != Int.MAX_VALUE }?.toLong()
             neighborsList.add(
                 NeighborCell(
                     techType = "LTE",
-                    band = BandCalculators.getLteBandString(id.earfcn),
+                    band = lteBand(id),
                     arfcn = id.earfcn,
                     pci = id.pci,
                     rsrp = rsrp,
@@ -618,19 +706,21 @@ class CellMonitorRepository(
                     operatorName = op,
                     mcc = mcc,
                     mnc = mnc,
-                    cellId = ci
+                    cellId = ci,
+                    simSlot = otherSlot(lte),
+                    servingOnSim = lte.isRegistered && otherSlot(lte) != null
                 )
             )
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            nrCells.filter { !it.isRegistered }.forEach { nr ->
+            nrCells.filter { it !== nrServing }.forEach { nr ->
                 val id = nr.cellIdentity as? CellIdentityNr
                 val str = nr.cellSignalStrength as? CellSignalStrengthNr
                 val band = id?.bands?.firstOrNull() ?: 0
                 val rsrp = str?.ssRsrp?.takeIf { it != Int.MAX_VALUE && it in -140..-44 }
                 val delta = if (rsrp != null && servingRsrp != null) rsrp - servingRsrp else null
-                val (mcc, mnc, op) = plmnFromIdentity(id)
+                val (mcc, mnc, op) = plmnFromIdentity(id, fallbackOf(nr))
                 val nci = id?.nci?.takeIf { it != Long.MAX_VALUE && it > 0 }
                 neighborsList.add(
                     NeighborCell(
@@ -644,18 +734,20 @@ class CellMonitorRepository(
                         operatorName = op,
                         mcc = mcc,
                         mnc = mnc,
-                        cellId = nci
+                        cellId = nci,
+                        simSlot = otherSlot(nr),
+                        servingOnSim = nr.isRegistered && otherSlot(nr) != null
                     )
                 )
             }
         }
 
-        wcdmaCells.filter { !it.isRegistered }.forEach { w ->
+        wcdmaCells.filter { it !== registeredWcdma }.forEach { w ->
             val id = w.cellIdentity
             val str = w.cellSignalStrength
             val rsrp = str.dbm.takeIf { it != Int.MAX_VALUE }
             val delta = if (rsrp != null && servingRsrp != null) rsrp - servingRsrp else null
-            val (mcc, mnc, op) = plmnFromIdentity(id)
+            val (mcc, mnc, op) = plmnFromIdentity(id, fallbackOf(w))
             neighborsList.add(
                 NeighborCell(
                     techType = "WCDMA",
@@ -667,17 +759,19 @@ class CellMonitorRepository(
                     operatorName = op,
                     mcc = mcc,
                     mnc = mnc,
-                    cellId = id.cid.takeIf { it != Int.MAX_VALUE }?.toLong()
+                    cellId = id.cid.takeIf { it != Int.MAX_VALUE }?.toLong(),
+                    simSlot = otherSlot(w),
+                    servingOnSim = w.isRegistered && otherSlot(w) != null
                 )
             )
         }
 
-        gsmCells.filter { !it.isRegistered }.forEach { g ->
+        gsmCells.filter { it !== registeredGsm }.forEach { g ->
             val id = g.cellIdentity
             val str = g.cellSignalStrength
             val rsrp = str.dbm.takeIf { it != Int.MAX_VALUE }
             val delta = if (rsrp != null && servingRsrp != null) rsrp - servingRsrp else null
-            val (mcc, mnc, op) = plmnFromIdentity(id)
+            val (mcc, mnc, op) = plmnFromIdentity(id, fallbackOf(g))
             neighborsList.add(
                 NeighborCell(
                     techType = "GSM",
@@ -689,7 +783,9 @@ class CellMonitorRepository(
                     operatorName = op,
                     mcc = mcc,
                     mnc = mnc,
-                    cellId = id.cid.takeIf { it != Int.MAX_VALUE }?.toLong()
+                    cellId = id.cid.takeIf { it != Int.MAX_VALUE }?.toLong(),
+                    simSlot = otherSlot(g),
+                    servingOnSim = g.isRegistered && otherSlot(g) != null
                 )
             )
         }
@@ -701,12 +797,12 @@ class CellMonitorRepository(
             val rsrp = c.cellSignalStrength.rsrp.takeIf { it != Int.MAX_VALUE && it in -140..-44 }
             val earfcn = id.earfcn.takeIf { it != Int.MAX_VALUE } ?: 0
             val pci = id.pci.takeIf { it != Int.MAX_VALUE } ?: 0
-            val (mcc, mnc, op) = plmnFromIdentity(id)
+            val (mcc, mnc, op) = plmnFromIdentity(id, fallbackOf(c))
             val ci = id.ci.takeIf { it != Int.MAX_VALUE }?.toLong()
             if (earfcn > 0 || pci > 0) {
                 observations.add(
                     CellObservation(
-                        "LTE", BandCalculators.getLteBandString(earfcn), earfcn, pci, rsrp,
+                        "LTE", lteBand(id), earfcn, pci, rsrp,
                         c.isRegistered, op, mcc, mnc, ci
                     )
                 )
@@ -720,7 +816,7 @@ class CellMonitorRepository(
                 val rsrp = str?.ssRsrp?.takeIf { it != Int.MAX_VALUE && it in -140..-44 }
                 val arfcn = id.nrarfcn.takeIf { it != Int.MAX_VALUE } ?: 0
                 val pci = id.pci.takeIf { it != Int.MAX_VALUE } ?: 0
-                val (mcc, mnc, op) = plmnFromIdentity(id)
+                val (mcc, mnc, op) = plmnFromIdentity(id, fallbackOf(c))
                 val nci = id.nci.takeIf { it != Long.MAX_VALUE && it > 0 }
                 if (arfcn > 0 || pci > 0) {
                     observations.add(
@@ -737,7 +833,7 @@ class CellMonitorRepository(
             val rsrp = c.cellSignalStrength.dbm.takeIf { it != Int.MAX_VALUE }
             val uarfcn = id.uarfcn.takeIf { it != Int.MAX_VALUE } ?: 0
             val pci = id.psc.takeIf { it != Int.MAX_VALUE } ?: 0
-            val (mcc, mnc, op) = plmnFromIdentity(id)
+            val (mcc, mnc, op) = plmnFromIdentity(id, fallbackOf(c))
             observations.add(
                 CellObservation(
                     "WCDMA", "B$uarfcn", uarfcn, pci, rsrp, c.isRegistered,
@@ -750,7 +846,7 @@ class CellMonitorRepository(
             val rsrp = c.cellSignalStrength.dbm.takeIf { it != Int.MAX_VALUE }
             val arfcn = id.arfcn.takeIf { it != Int.MAX_VALUE } ?: 0
             val pci = id.bsic.takeIf { it != Int.MAX_VALUE } ?: 0
-            val (mcc, mnc, op) = plmnFromIdentity(id)
+            val (mcc, mnc, op) = plmnFromIdentity(id, fallbackOf(c))
             observations.add(
                 CellObservation(
                     "GSM", "ARFCN$arfcn", arfcn, pci, rsrp, c.isRegistered,

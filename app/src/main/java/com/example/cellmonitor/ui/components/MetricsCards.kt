@@ -512,6 +512,18 @@ fun NeighborCellItem(
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     )
                 }
+                neighbor.simSlot?.let { slot ->
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "SIM ${slot + 1}" + if (neighbor.servingOnSim) " SERVING" else "",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TechAmber,
+                        modifier = Modifier
+                            .background(TechAmber.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
             }
             Text(
                 text = "PCI ${neighbor.pci} • ARFCN ${neighbor.arfcn}",

@@ -69,6 +69,8 @@ class UpdateChecker(private val context: Context) {
 
     /** Call on resume / startup. Respects cooldown unless [force]. */
     suspend fun check(force: Boolean = false) {
+        // onCreate and onResume both call this at startup; run one check at a time
+        if (_state.value.checking) return
         if (!force) {
             val last = prefs.getLong(KEY_LAST_CHECK, 0L)
             if (System.currentTimeMillis() - last < UpdateConfig.CHECK_COOLDOWN_MS) {
@@ -198,17 +200,27 @@ class UpdateChecker(private val context: Context) {
     }
 
     private suspend fun fetchRemoteVersion(): RemoteVersion = withContext(Dispatchers.IO) {
-        // 1) Cloudflare Pages / static version.json
+        // Ask BOTH sources and use the newer one. A static version.json that nobody
+        // updated must never hide a newer GitHub release.
+        var pages: RemoteVersion? = null
+        var pagesError: Exception? = null
         try {
-            return@withContext parseVersionJson(httpGet(UpdateConfig.VERSION_JSON_URL))
-        } catch (_: Exception) {
-            // fall through
+            pages = parseVersionJson(httpGet(UpdateConfig.VERSION_JSON_URL))
+        } catch (e: Exception) {
+            pagesError = e
         }
-        // 2) GitHub Releases API
-        val api =
-            "https://api.github.com/repos/${UpdateConfig.GITHUB_REPO}/releases/latest"
-        val body = httpGet(api)
-        parseGithubRelease(body)
+
+        var github: RemoteVersion? = null
+        var githubError: Exception? = null
+        try {
+            val api = "https://api.github.com/repos/${UpdateConfig.GITHUB_REPO}/releases/latest"
+            github = parseGithubRelease(httpGet(api))
+        } catch (e: Exception) {
+            githubError = e
+        }
+
+        listOfNotNull(pages, github).maxByOrNull { it.versionCode }
+            ?: throw (githubError ?: pagesError ?: IllegalStateException("No update source reachable"))
     }
 
     private fun httpGet(url: String): String {
@@ -240,7 +252,7 @@ class UpdateChecker(private val context: Context) {
         val o = JSONObject(json)
         val tag = o.optString("tag_name", "v0").removePrefix("v")
         val assets = o.optJSONArray("assets")
-        var apkUrl = o.optString("html_url", "")
+        var apkUrl: String? = null
         if (assets != null) {
             for (i in 0 until assets.length()) {
                 val a = assets.getJSONObject(i)
@@ -251,6 +263,8 @@ class UpdateChecker(private val context: Context) {
                 }
             }
         }
+        // A release page without an attached .apk cannot be installed - do not offer it as an update
+        val finalApkUrl = apkUrl ?: throw IllegalStateException("Release $tag has no .apk asset")
         // Prefer versionCode from tag like 1.2.3 → 10203; else use published timestamp order via name
         val code = tag.split(".").mapNotNull { it.toIntOrNull() }.let { p ->
             when (p.size) {
@@ -263,7 +277,7 @@ class UpdateChecker(private val context: Context) {
         return RemoteVersion(
             versionCode = code,
             versionName = tag,
-            apkUrl = apkUrl,
+            apkUrl = finalApkUrl,
             releaseNotes = o.optString("body", "").take(500),
             publishedAt = o.optString("published_at", "")
         )

@@ -42,3 +42,29 @@ CI will:
 1. Build the APK  
 2. Create a GitHub Release and upload `CellMonitor.apk`  
 3. Update `web/version.json` and push (Cloudflare Pages redeploys automatically if connected)
+
+## Signing key (required once)
+
+Android only installs an update over an existing app when both APKs are signed with the **same key**.
+`build-apk.yml` makes a brand-new throw-away key on every run, so its APKs can never update each other.
+The release workflow therefore signs with one fixed key stored in GitHub secrets.
+
+```bash
+keytool -genkeypair -v -keystore cellmonitor.keystore -alias cellmonitor \
+  -keyalg RSA -keysize 2048 -validity 36500
+base64 -w0 cellmonitor.keystore   # copy the output
+```
+
+GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Value |
+|---|---|
+| `KEYSTORE_BASE64` | the base64 output above |
+| `KEYSTORE_PASSWORD` | the keystore password |
+| `KEY_ALIAS` | `cellmonitor` |
+| `KEY_PASSWORD` | the key password |
+
+Keep a private backup of `cellmonitor.keystore`; if it is lost, no future build can update installed copies.
+
+Phones that have an APK signed with an older (different) key must uninstall once and install the first
+release built by this workflow. After that, updates install in place.

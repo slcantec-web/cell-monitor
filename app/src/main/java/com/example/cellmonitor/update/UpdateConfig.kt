@@ -21,5 +21,5 @@ object UpdateConfig {
     const val GITHUB_REPO = "slcantec-web/cell-monitor"
 
     /** How often to auto-check (ms). Checked on app resume / cold start. */
-    const val CHECK_COOLDOWN_MS = 6 * 60 * 60 * 1000L // 6 hours
+    const val CHECK_COOLDOWN_MS = 30 * 60 * 1000L // 30 minutes
 }

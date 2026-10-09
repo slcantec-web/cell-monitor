@@ -381,6 +381,33 @@ fun CellMonitorScreen(
                 }
             }
 
+            // Location switch off -> Android returns an empty cell list
+            if (state.isPermissionGranted && !state.locationEnabled && !state.isDemoMode) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .background(TechAmber.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                        .border(1.dp, TechAmber.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                        .padding(14.dp)
+                ) {
+                    Column {
+                        Text(
+                            text = "Location is turned off",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TechAmber
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Android only reports cell towers while the Location switch is on. Turn it on in quick settings, then come back.",
+                            fontSize = 11.sp,
+                            color = TextSecondary
+                        )
+                    }
+                }
+            }
+
             // Tab Content
             when (selectedTab) {
                 0 -> OverviewTabContent(state)
