@@ -17,6 +17,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -88,6 +89,7 @@ fun SignalGraph(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(130.dp)
+                    .graphicsLayer() // promote chart to its own layer — smoother list scroll
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val w = size.width

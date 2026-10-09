@@ -23,6 +23,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -260,17 +261,22 @@ fun CellMonitorScreen(
                             )
                         }
 
-                        // Manual Refresh Button (spinning when refreshing)
-                        val infiniteTransition = rememberInfiniteTransition(label = "refresh_spin")
-                        val rotation by infiniteTransition.animateFloat(
-                            initialValue = 0f,
-                            targetValue = 360f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(800, easing = LinearEasing),
-                                repeatMode = RepeatMode.Restart
-                            ),
-                            label = "spin_angle"
-                        )
+                        // Manual Refresh Button (spin only while refreshing — avoids perpetual GPU work)
+                        val rotation = if (state.isRefreshing) {
+                            val infiniteTransition = rememberInfiniteTransition(label = "refresh_spin")
+                            val angle by infiniteTransition.animateFloat(
+                                initialValue = 0f,
+                                targetValue = 360f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(800, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Restart
+                                ),
+                                label = "spin_angle"
+                            )
+                            angle
+                        } else {
+                            0f
+                        }
 
                         IconButton(
                             onClick = { repository.refresh() },
@@ -282,7 +288,7 @@ fun CellMonitorScreen(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = "Refresh",
                                 tint = TechCyan,
-                                modifier = Modifier.rotate(if (state.isRefreshing) rotation else 0f)
+                                modifier = Modifier.rotate(rotation)
                             )
                         }
                     }
@@ -468,57 +474,112 @@ fun CellMonitorScreen(
 
 @Composable
 private fun OverviewTabContent(state: com.example.cellmonitor.data.CellMonitorState) {
+    // Live RF dashboard — gauge, quality tiles, history. No deep cell-ID tables (those live on Tower).
     LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item {
+        item(key = "ov_gauge", contentType = "gauge") {
             SignalGauge(
                 signal = state.signal,
                 tech = state.servingCell?.tech ?: RadioTech.UNKNOWN
             )
         }
 
-        item {
-            CarrierHeaderCard(carrier = state.carrier)
+        item(key = "ov_quality", contentType = "quality") {
+            SignalQualityGrid(signal = state.signal)
         }
 
-        item {
+        item(key = "ov_graph", contentType = "graph") {
+            SignalGraph(history = state.signalHistory)
+        }
+
+        item(key = "ov_carrier_strip", contentType = "carrier_strip") {
+            OverviewCarrierStrip(carrier = state.carrier, serving = state.servingCell)
+        }
+
+        item(key = "ov_tdd", contentType = "tdd") {
             TddBandCheckCard(
                 seenCells = state.seenCells,
                 nowMs = state.lastUpdatedMs
             )
         }
 
-        item {
+        item(key = "ov_bands", contentType = "bands") {
             BandSupportCard(seenCells = state.seenCells)
-        }
-
-        item {
-            SignalQualityGrid(signal = state.signal)
-        }
-
-        item {
-            SignalGraph(history = state.signalHistory)
-        }
-
-        item {
-            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
 
 @Composable
-private fun ServingCellTabContent(state: com.example.cellmonitor.data.CellMonitorState) {
-    LazyColumn(
+private fun OverviewCarrierStrip(
+    carrier: com.example.cellmonitor.data.CarrierInfo,
+    serving: com.example.cellmonitor.data.ServingCell?
+) {
+    Row(
         modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .fillMaxWidth()
+            .background(TechCardSurface, RoundedCornerShape(14.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        item {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = carrier.operatorName.ifBlank { "Unknown operator" },
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary,
+                maxLines = 1
+            )
+            Text(
+                text = buildString {
+                    append(carrier.mcc)
+                    if (carrier.mnc.isNotBlank()) append("-").append(carrier.mnc)
+                    serving?.let { append("  ·  ").append(it.band).append("  ·  PCI ").append(it.pci) }
+                },
+                fontSize = 11.sp,
+                color = TextMuted,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1
+            )
+        }
+        Text(
+            text = carrier.displayType.ifBlank { serving?.tech?.generation ?: "—" },
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = TechCyan
+        )
+    }
+}
+
+@Composable
+private fun ServingCellTabContent(state: com.example.cellmonitor.data.CellMonitorState) {
+    // Tower deep-dive — cell identity, map tools, full subscription. No gauge/graph (Overview owns those).
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item(key = "tw_title", contentType = "title") {
+            Column {
+                Text(
+                    text = "SERVING TOWER",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TechCyan,
+                    letterSpacing = 0.8.sp
+                )
+                Text(
+                    text = "Cell identity, radio config, and map lookup",
+                    fontSize = 11.sp,
+                    color = TextMuted
+                )
+            }
+        }
+
+        item(key = "tw_serving", contentType = "serving") {
             ServingCellCard(
                 cell = state.servingCell,
                 signal = state.signal,
@@ -527,20 +588,12 @@ private fun ServingCellTabContent(state: com.example.cellmonitor.data.CellMonito
             )
         }
 
-        item {
+        item(key = "tw_mapper", contentType = "mapper") {
             CellMapperButton(state = state)
         }
 
-        item {
+        item(key = "tw_carrier", contentType = "carrier") {
             CarrierHeaderCard(carrier = state.carrier)
-        }
-
-        item {
-            SignalQualityGrid(signal = state.signal)
-        }
-
-        item {
-            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
@@ -605,16 +658,22 @@ private fun NeighborsTabContent(
                 }
             }
         } else {
-            items(state.neighbors) { neighbor ->
+            items(
+                items = state.neighbors,
+                key = { n -> "${n.techType}-${n.pci}-${n.arfcn}-${n.band}" },
+                contentType = { "neighbor" }
+            ) { neighbor ->
                 NeighborCellItem(neighbor = neighbor)
             }
         }
 
         // ---- Running log of every cell seen since last clear ----
-        val seenSorted = state.seenCells.sortedWith(
-            compareByDescending<SeenCell> { it.techType == "LTE" && (it.band == "B40" || it.band == "B41") }
-                .thenByDescending { it.bestRsrp ?: -999 }
-        )
+        val seenSorted = remember(state.seenCells) {
+            state.seenCells.sortedWith(
+                compareByDescending<SeenCell> { it.techType == "LTE" && (it.band == "B40" || it.band == "B41") }
+                    .thenByDescending { it.bestRsrp ?: -999 }
+            )
+        }
         item {
             Row(
                 modifier = Modifier
@@ -647,7 +706,11 @@ private fun NeighborsTabContent(
                 )
             }
         } else {
-            items(seenSorted) { cell ->
+            items(
+                items = seenSorted,
+                key = { c -> "${c.techType}-${c.pci}-${c.arfcn}-${c.band}" },
+                contentType = { "seen" }
+            ) { cell ->
                 SeenCellItem(cell = cell, nowMs = state.lastUpdatedMs)
             }
         }
@@ -663,7 +726,16 @@ private fun DiagnosticsTabContent(
     state: com.example.cellmonitor.data.CellMonitorState,
     context: Context
 ) {
-    val fullDump = buildString {
+    val fullDump = remember(
+        state.lastUpdatedMs,
+        state.isDemoMode,
+        state.carrier,
+        state.servingCell,
+        state.signal,
+        state.neighbors,
+        state.seenCells
+    ) {
+        buildString {
         appendLine("========================================")
         appendLine("CELL MONITOR TELEMETRY EXPORT")
         appendLine("Timestamp: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(state.lastUpdatedMs))}")
@@ -727,6 +799,7 @@ private fun DiagnosticsTabContent(
         appendLine("[ALL CELLS SEEN (${state.seenCells.size})]")
         state.seenCells.forEach { c ->
             appendLine("${c.techType} ${c.band} | PCI: ${c.pci} | ARFCN: ${c.arfcn} | Best: ${c.bestRsrp ?: "---"} dBm | Last: ${c.lastRsrp ?: "---"} dBm | Seen: ${c.seenCount}x${if (c.wasServing) " | was serving" else ""}")
+        }
         }
     }
 

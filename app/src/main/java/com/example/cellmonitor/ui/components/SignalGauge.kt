@@ -53,9 +53,10 @@ fun SignalGauge(
     modifier: Modifier = Modifier
 ) {
     val targetProgress = (signal.scorePercentage / 100f).coerceIn(0f, 1f)
+    // Short tween keeps scroll smooth when auto-refresh updates the score every few seconds
     val animatedProgress by animateFloatAsState(
         targetValue = targetProgress,
-        animationSpec = tween(durationMillis = 600),
+        animationSpec = tween(durationMillis = 280),
         label = "gauge_progress"
     )
 
