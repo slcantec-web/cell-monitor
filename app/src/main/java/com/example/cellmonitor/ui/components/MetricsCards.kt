@@ -379,19 +379,48 @@ fun NeighborCellItem(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
-            Text(
-                text = "${neighbor.techType} ${neighbor.band}",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "${neighbor.techType} ${neighbor.band}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                if (neighbor.operatorName.isNotBlank() && neighbor.operatorName != "---" && neighbor.operatorName != "Unknown") {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = neighbor.operatorName,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TechCyan,
+                        modifier = Modifier
+                            .background(TechCyan.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
             Text(
                 text = "PCI ${neighbor.pci} • ARFCN ${neighbor.arfcn}",
                 fontSize = 11.sp,
                 color = TextSecondary,
                 fontFamily = FontFamily.Monospace
             )
+            val idLine = buildString {
+                if (neighbor.cellId != null && neighbor.cellId > 0) append("CID ${neighbor.cellId}")
+                if (neighbor.mcc != "---" && neighbor.mnc != "---") {
+                    if (isNotEmpty()) append(" • ")
+                    append("PLMN ${neighbor.mcc}-${neighbor.mnc}")
+                }
+            }
+            if (idLine.isNotEmpty()) {
+                Text(
+                    text = idLine,
+                    fontSize = 10.sp,
+                    color = TextMuted,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
         }
         Column(horizontalAlignment = Alignment.End) {
             Text(
@@ -440,7 +469,7 @@ fun SeenCellItem(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "${cell.techType} ${cell.band}",
@@ -460,6 +489,18 @@ fun SeenCellItem(
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     )
                 }
+                if (cell.operatorName.isNotBlank() && cell.operatorName != "---" && cell.operatorName != "Unknown") {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = cell.operatorName,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TechCyan,
+                        modifier = Modifier
+                            .background(TechCyan.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
             }
             Text(
                 text = "PCI ${cell.pci} • ARFCN ${cell.arfcn}",
@@ -467,6 +508,21 @@ fun SeenCellItem(
                 color = TextSecondary,
                 fontFamily = FontFamily.Monospace
             )
+            val idLine = buildString {
+                if (cell.cellId != null && cell.cellId > 0) append("CID ${cell.cellId}")
+                if (cell.mcc != "---" && cell.mnc != "---") {
+                    if (isNotEmpty()) append(" • ")
+                    append("PLMN ${cell.mcc}-${cell.mnc}")
+                }
+            }
+            if (idLine.isNotEmpty()) {
+                Text(
+                    text = idLine,
+                    fontSize = 10.sp,
+                    color = TextMuted,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
             Text(
                 text = "Seen ${cell.seenCount}x • $ageText",
                 fontSize = 10.sp,

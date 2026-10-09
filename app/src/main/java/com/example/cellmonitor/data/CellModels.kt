@@ -73,7 +73,13 @@ data class NeighborCell(
     val pci: Int,
     val rsrp: Int?,
     val rsrq: Int? = null,
-    val deltaRsrp: Int? = null
+    val deltaRsrp: Int? = null,
+    /** Friendly ISP / operator name for this cell (from cell identity PLMN). */
+    val operatorName: String = "---",
+    val mcc: String = "---",
+    val mnc: String = "---",
+    /** Full cell identity (ECI / NCI / etc.) when available. */
+    val cellId: Long? = null
 )
 
 data class SeenCell(
@@ -86,7 +92,12 @@ data class SeenCell(
     val bestRsrp: Int?,
     val firstSeenMs: Long,
     val lastSeenMs: Long,
-    val seenCount: Int
+    val seenCount: Int,
+    /** Friendly ISP / operator name for this cell. */
+    val operatorName: String = "---",
+    val mcc: String = "---",
+    val mnc: String = "---",
+    val cellId: Long? = null
 )
 
 data class SignalHistoryPoint(
