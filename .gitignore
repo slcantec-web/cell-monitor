@@ -1,0 +1,15 @@
+# Local / generated
+*.keystore
+*.jks
+debug.keystore
+local.properties
+.env
+.idea/
+*.iml
+.gradle/
+build/
+app/build/
+**/build/
+.DS_Store
+*.apk
+!web/**/*.apk

@@ -2,12 +2,19 @@ name: Release APK + update site
 
 # Publishes the APK as a GitHub Release and updates web/version.json (served by Cloudflare Pages),
 # which is what the in-app updater reads.
+#
 #   Tag push:   git tag v1.1.0 && git push origin v1.1.0
-#   Manual:     Actions -> "Release APK + update site" -> Run workflow (enter 1.1.0)
+#   Manual:     Actions → "Release APK + update site" → Run workflow (enter 1.1.0)
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   KEYSTORE_BASE64   – base64 of the stable .keystore (same key every release)
+#   KEYSTORE_PASSWORD – keystore password
+#   KEY_ALIAS         – key alias (e.g. cellmonitor)
+#   KEY_PASSWORD      – key password
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "[0-9]*"]
   workflow_dispatch:
     inputs:
       versionName:
@@ -57,6 +64,7 @@ jobs:
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "tag=v$NAME" >> "$GITHUB_OUTPUT"
+          echo "Resolved versionName=$NAME versionCode=$CODE tag=v$NAME"
 
       - uses: actions/setup-java@v5
         with:
@@ -71,10 +79,18 @@ jobs:
           KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           if [ -z "$KS_B64" ]; then
-            echo "::error::Secret KEYSTORE_BASE64 is missing. Android only installs an update over the existing app if every build is signed with the same key. See web/README.md (Signing key)."
+            echo "::error::Secret KEYSTORE_BASE64 is missing."
+            echo "::error::Android only installs an update over the existing app if every build is signed with the same key."
+            echo "::error::See web/README.md (Signing key) for how to create and add the four secrets."
             exit 1
           fi
           echo "$KS_B64" | base64 -d > debug.keystore
+          # Sanity: file must be a readable keystore
+          if [ ! -s debug.keystore ]; then
+            echo "::error::KEYSTORE_BASE64 decoded to an empty file"
+            exit 1
+          fi
+          echo "Keystore restored ($(wc -c < debug.keystore) bytes)"
 
       - name: Build APK
         env:
@@ -84,9 +100,17 @@ jobs:
           APP_NAME: ${{ steps.v.outputs.name }}
           APP_CODE: ${{ steps.v.outputs.code }}
         run: |
+          if [ -z "$CM_STORE_PASSWORD" ] || [ -z "$CM_KEY_ALIAS" ] || [ -z "$CM_KEY_PASSWORD" ]; then
+            echo "::error::Missing KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD secrets"
+            exit 1
+          fi
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon -PappVersionName="$APP_NAME" -PappVersionCode="$APP_CODE"
+          ./gradlew assembleDebug --no-daemon \
+            -PappVersionName="$APP_NAME" \
+            -PappVersionCode="$APP_CODE"
+          # Always publish under the stable name the updater expects
           cp app/build/outputs/apk/debug/app-debug.apk CellMonitor.apk
+          ls -la CellMonitor.apk
 
       - name: Sanity-check the APK (version, INTERNET permission)
         env:
@@ -95,10 +119,11 @@ jobs:
         run: |
           AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/aapt2"
           "$AAPT2" dump badging CellMonitor.apk > badging.txt
-          grep "^package:" badging.txt
+          cat badging.txt | head -5
           grep -q "versionCode='$APP_CODE'" badging.txt || { echo "::error::versionCode in the APK is not $APP_CODE"; exit 1; }
           grep -q "versionName='$APP_NAME'" badging.txt || { echo "::error::versionName in the APK is not $APP_NAME"; exit 1; }
           grep -q "uses-permission: name='android.permission.INTERNET'" badging.txt || { echo "::error::APK lacks INTERNET permission"; exit 1; }
+          echo "APK OK: versionName=$APP_NAME versionCode=$APP_CODE"
 
       - name: Publish GitHub release
         env:
@@ -106,12 +131,23 @@ jobs:
           TAG: ${{ steps.v.outputs.tag }}
           APP_NAME: ${{ steps.v.outputs.name }}
         run: |
+          # Also remove any old mis-cased asset if present
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" CellMonitor.apk --clobber
           else
-            gh release create "$TAG" CellMonitor.apk --target "$GITHUB_SHA" \
-              --title "Cell Monitor $APP_NAME" --notes-file "$RUNNER_TEMP/notes.txt"
+            # Prefer creating on the tag ref if it already exists; otherwise create tag + release
+            if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+              gh release create "$TAG" CellMonitor.apk \
+                --title "Cell Monitor $APP_NAME" \
+                --notes-file "$RUNNER_TEMP/notes.txt"
+            else
+              gh release create "$TAG" CellMonitor.apk \
+                --target "$GITHUB_SHA" \
+                --title "Cell Monitor $APP_NAME" \
+                --notes-file "$RUNNER_TEMP/notes.txt"
+            fi
           fi
+          echo "Release $TAG published with CellMonitor.apk"
 
       - name: Update web/version.json on main (Cloudflare Pages redeploys)
         env:
@@ -134,12 +170,17 @@ jobs:
           with open("web/version.json", "w") as f:
               json.dump(data, f, indent=2)
               f.write("\n")
+          print(json.dumps(data, indent=2))
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add web/version.json
-          git commit -m "chore: publish $APP_NAME to the update site" || echo "version.json unchanged"
-          git push origin main
+          if git diff --staged --quiet; then
+            echo "version.json unchanged"
+          else
+            git commit -m "chore: publish $APP_NAME to the update site"
+            git push origin main
+          fi
 
       - name: Remove keystore
         if: always()
