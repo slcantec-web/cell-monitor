@@ -1,8 +1,8 @@
 {
-  "versionCode": 10007,
-  "versionName": "1.0.7",
+  "versionCode": 10008,
+  "versionName": "1.0.8",
   "apkUrl": "https://github.com/slcantec-web/cell-monitor/releases/latest/download/CellMonitor.apk",
-  "releaseNotes": "Nearby towers of all operators (OpenCellID lookup, works with a single SIM). Cells with no reported operator now show as Unknown instead of Dialog.",
+  "releaseNotes": "Fix OpenCellID tower lookup HTTP 400: retries with smaller search areas, cleans a pasted token, and shows the server's error text.",
   "minSdk": 30,
-  "publishedAt": "2026-10-10T19:23:02Z"
+  "publishedAt": "2026-10-10T19:40:12Z"
 }
