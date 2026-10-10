@@ -91,6 +91,7 @@ import com.example.cellmonitor.data.SeenCell
 import com.example.cellmonitor.ui.components.BandSupportCard
 import com.example.cellmonitor.ui.components.CarrierHeaderCard
 import com.example.cellmonitor.ui.components.missingWatchedBands
+import com.example.cellmonitor.ui.components.NearbyTowersCard
 import com.example.cellmonitor.ui.components.NeighborCellItem
 import com.example.cellmonitor.ui.components.ServingCellCard
 import com.example.cellmonitor.ui.components.SeenCellItem
@@ -651,6 +652,14 @@ private fun NeighborsTabContent(
             ) { neighbor ->
                 NeighborCellItem(neighbor = neighbor)
             }
+        }
+
+        // ---- Other operators' towers from the OpenCellID database (works with a single SIM) ----
+        item(key = "nb_nearby_db", contentType = "nearby_db") {
+            NearbyTowersCard(
+                registeredMcc = state.carrier.mcc,
+                modifier = Modifier.padding(top = 6.dp)
+            )
         }
 
         // ---- Running log of every cell seen since last clear ----
