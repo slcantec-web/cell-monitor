@@ -495,8 +495,17 @@ class CellMonitorRepository(
         tagged.values.forEach { simOf[it.info] = it }
 
         fun fromData(c: CellInfo): Boolean = simOf[c]?.isData != false
+        /**
+         * PLMN to use when a cell's own identity omits MCC/MNC. Only a REGISTERED cell is known to
+         * belong to the reporting SIM's network; for any other cell guessing that operator would
+         * mislabel it (e.g. every neighbor shown as Dialog), so it stays unknown ("---").
+         */
         fun fallbackOf(c: CellInfo): Pair<String, String> =
-            simOf[c]?.let { it.fbMcc to it.fbMnc } ?: plmnOf(tm)
+            if (!c.isRegistered) {
+                "---" to "---"
+            } else {
+                simOf[c]?.let { it.fbMcc to it.fbMnc } ?: plmnOf(tm)
+            }
         /** SIM slot (0-based) when the cell came from a SIM other than the data SIM. */
         fun otherSlot(c: CellInfo): Int? = simOf[c]?.takeIf { !it.isData && it.slot >= 0 }?.slot
 
