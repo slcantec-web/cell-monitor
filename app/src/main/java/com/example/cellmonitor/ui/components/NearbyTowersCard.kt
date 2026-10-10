@@ -70,6 +70,7 @@ fun NearbyTowersCard(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var towers by remember { mutableStateOf<List<DbTower>?>(null) }
+    var radiusUsed by remember { mutableStateOf(0) }
     var editingToken by remember { mutableStateOf(false) }
 
     fun search() {
@@ -82,12 +83,14 @@ fun NearbyTowersCard(
         error = null
         scope.launch {
             try {
-                towers = TowerDatabase.fetchNearby(
+                val result = TowerDatabase.fetchNearby(
                     token = token,
                     lat = loc.first,
                     lon = loc.second,
                     mcc = registeredMcc
                 )
+                towers = result.towers
+                radiusUsed = result.radiusM
             } catch (e: Exception) {
                 error = e.message ?: "Lookup failed"
             } finally {
@@ -130,7 +133,7 @@ fun NearbyTowersCard(
 
             Text(
                 text = "Android only lets this app hear the network your SIM is on. This list shows " +
-                    "other operators' towers within ~1.5 km from the OpenCellID database " +
+                    "other operators' towers near you (up to ~1.5 km) from the OpenCellID database " +
                     "(crowd-sourced, so positions are approximate and not a live scan).",
                 fontSize = 11.sp,
                 color = TextMuted
@@ -215,7 +218,7 @@ fun NearbyTowersCard(
             towers?.let { list ->
                 if (list.isEmpty()) {
                     Text(
-                        text = "The database has no towers within 1.5 km of your last known location.",
+                        text = "The database has no towers within $radiusUsed m of your last known location.",
                         fontSize = 12.sp,
                         color = TextMuted
                     )
@@ -223,7 +226,7 @@ fun NearbyTowersCard(
                     val groups = list.groupBy { it.operatorName }
                         .entries.sortedBy { e -> e.value.minOf { it.distanceM } }
                     Text(
-                        text = "${list.size} towers · ${groups.size} operators " +
+                        text = "${list.size} towers · ${groups.size} operators · within $radiusUsed m " +
                             "(each lookup uses up to ${TowerDatabase.MAX_CELLS} of your daily API credits)",
                         fontSize = 10.sp,
                         color = TextMuted

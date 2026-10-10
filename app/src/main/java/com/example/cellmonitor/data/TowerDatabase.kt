@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -29,6 +30,12 @@ data class DbTower(
     val distanceM: Int
 )
 
+/** Towers found plus the search radius that finally worked (it can shrink after a 400). */
+data class NearbyResult(
+    val towers: List<DbTower>,
+    val radiusM: Int
+)
+
 /**
  * Looks up towers of ALL operators around the phone from OpenCellID.
  *
@@ -43,15 +50,18 @@ object TowerDatabase {
     private const val PREFS = "tower_db_prefs"
     private const val KEY_TOKEN = "opencellid_token"
     const val MAX_CELLS = 50
-    const val DEFAULT_RADIUS_M = 1500
     private const val ENDPOINT = "https://opencellid.org/cell/getInArea"
+
+    /** Pasted tokens often carry spaces, a newline or quotes; none of those belong in a key. */
+    private fun cleanToken(token: String): String =
+        token.filterNot { it.isWhitespace() }.trim('"', '\'')
 
     fun getToken(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_TOKEN, "").orEmpty()
 
     fun saveToken(context: Context, token: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY_TOKEN, token.trim()).apply()
+            .edit().putString(KEY_TOKEN, cleanToken(token)).apply()
     }
 
     /** Last known phone location (same approach as the CellMapper button), or null. */
@@ -74,31 +84,26 @@ object TowerDatabase {
         }
     }
 
-    /**
-     * Towers within [radiusM] of the point, nearest first.
-     * [mcc] limits the query to one country (e.g. "413" for Sri Lanka); pass blank for any.
-     * Throws [IllegalStateException] with a readable message on failure.
-     */
-    suspend fun fetchNearby(
-        token: String,
-        lat: Double,
-        lon: Double,
-        mcc: String,
-        radiusM: Int = DEFAULT_RADIUS_M
-    ): List<DbTower> = withContext(Dispatchers.IO) {
+    private fun buildUrl(token: String, lat: Double, lon: Double, radiusM: Int, mcc: String?): String {
         val dLat = radiusM / 111_320.0
         val dLon = radiusM / (111_320.0 * cos(Math.toRadians(lat)).coerceAtLeast(0.01))
-        val bbox = "${lat - dLat},${lon - dLon},${lat + dLat},${lon + dLon}"
-
-        val url = buildString {
+        // Fixed 6-decimal numbers with a dot, whatever the phone's language/locale is.
+        val bbox = String.format(
+            Locale.US, "%.6f,%.6f,%.6f,%.6f",
+            lat - dLat, lon - dLon, lat + dLat, lon + dLon
+        )
+        return buildString {
             append(ENDPOINT)
             append("?key=").append(java.net.URLEncoder.encode(token, "UTF-8"))
             append("&BBOX=").append(bbox)
-            if (mcc.length == 3 && mcc.all(Char::isDigit)) append("&mcc=").append(mcc)
+            if (mcc != null) append("&mcc=").append(mcc)
             append("&limit=").append(MAX_CELLS)
             append("&format=json")
         }
+    }
 
+    /** HTTP status and body (the error body too, so the real reason can be shown). */
+    private fun request(url: String): Pair<Int, String> {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15_000
             readTimeout = 20_000
@@ -107,18 +112,62 @@ object TowerDatabase {
         }
         try {
             val code = conn.responseCode
-            when (code) {
-                in 200..299 -> Unit
-                403 -> throw IllegalStateException("OpenCellID rejected the token. Check it and try again.")
-                429 -> throw IllegalStateException("Daily OpenCellID limit reached. Try again tomorrow.")
-                404 -> return@withContext emptyList()
-                else -> throw IllegalStateException("OpenCellID error (HTTP $code)")
-            }
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
-            parse(body, lat, lon)
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            return code to body
         } finally {
             conn.disconnect()
         }
+    }
+
+    /** Short ": reason" taken from an XML/JSON/plain error body, or "" when there is none. */
+    private fun errorDetail(body: String): String {
+        val info = Regex("info=\"([^\"]*)\"").find(body)?.groupValues?.get(1)
+        val text = (info ?: body).replace(Regex("\\s+"), " ").trim().take(120)
+        return if (text.isEmpty()) "" else ": $text"
+    }
+
+    /**
+     * Towers around the point, nearest first.
+     * [mcc] limits the query to one country (e.g. "413" for Sri Lanka); pass blank for any.
+     *
+     * OpenCellID answers HTTP 400 ("Invalid input data") without saying which input it dislikes,
+     * so on a 400 the search is retried with smaller areas and finally without the country
+     * filter before giving up. Throws [IllegalStateException] with a readable message on failure.
+     */
+    suspend fun fetchNearby(
+        token: String,
+        lat: Double,
+        lon: Double,
+        mcc: String
+    ): NearbyResult = withContext(Dispatchers.IO) {
+        val key = cleanToken(token)
+        val mccParam = mcc.takeIf { it.length == 3 && it.all(Char::isDigit) }
+
+        val attempts = buildList {
+            add(1500 to mccParam)
+            add(700 to mccParam)
+            add(300 to mccParam)
+            if (mccParam != null) add(300 to null)
+        }
+
+        var lastDetail = ""
+        for ((radius, mccForTry) in attempts) {
+            val (code, body) = request(buildUrl(key, lat, lon, radius, mccForTry))
+            when {
+                code in 200..299 -> return@withContext NearbyResult(parse(body, lat, lon), radius)
+                code == 404 -> return@withContext NearbyResult(emptyList(), radius)
+                code == 400 -> {
+                    lastDetail = errorDetail(body)
+                    continue
+                }
+                code == 401 -> throw IllegalStateException("OpenCellID says the API token is invalid. Check it and try again.")
+                code == 403 -> throw IllegalStateException("OpenCellID refused this token for tower searches (HTTP 403)${errorDetail(body)}")
+                code == 429 -> throw IllegalStateException("Daily OpenCellID limit reached. Try again tomorrow.")
+                else -> throw IllegalStateException("OpenCellID error (HTTP $code)${errorDetail(body)}")
+            }
+        }
+        throw IllegalStateException("OpenCellID rejected the request (HTTP 400)$lastDetail")
     }
 
     private fun parse(json: String, lat: Double, lon: Double): List<DbTower> {
